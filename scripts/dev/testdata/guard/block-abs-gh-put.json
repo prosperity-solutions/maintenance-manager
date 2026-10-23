@@ -1,0 +1,11 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "/opt/homebrew/bin/gh api -X PUT repos/o/r/x"
+    }
+  }
+}

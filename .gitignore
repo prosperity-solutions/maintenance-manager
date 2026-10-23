@@ -1,0 +1,7 @@
+notes/
+.mm-ship.json
+dist/
+cmd/maintenance-manager/kodata/
+.claude/worktrees/
+.claude/settings.local.json
+.DS_Store

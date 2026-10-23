@@ -1,0 +1,11 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "sed -n 1,20p scripts/dev/harden-public-repo.sh"
+    }
+  }
+}

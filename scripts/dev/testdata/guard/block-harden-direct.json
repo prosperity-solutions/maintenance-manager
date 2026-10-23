@@ -1,0 +1,11 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "./scripts/dev/harden-public-repo.sh"
+    }
+  }
+}

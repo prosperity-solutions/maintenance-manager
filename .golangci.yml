@@ -1,0 +1,24 @@
+# golangci-lint v2 (docs/HANDOVER.md D12). Run: scripts/dev/t golangci-lint run
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - noctx
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.RemoveAll
+        - (*os.File).Close
+        - os.Remove
+  exclusions:
+    rules:
+      # Test helpers run git and sh with variable arguments and write fixtures
+      # with ordinary permissions.
+      - path: (_test\.go|^test/)
+        linters: [gosec]
+        text: "G(204|30[146])"

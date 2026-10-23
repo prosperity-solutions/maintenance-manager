@@ -1,0 +1,17 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr checkout 7"
+    }
+  },
+  "gh": {
+    "login": "me",
+    "authors": {
+      "7": "me"
+    }
+  }
+}

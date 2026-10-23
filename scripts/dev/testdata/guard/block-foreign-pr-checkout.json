@@ -1,0 +1,17 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr checkout 8"
+    }
+  },
+  "gh": {
+    "login": "me",
+    "authors": {
+      "8": "dependabot[bot]"
+    }
+  }
+}

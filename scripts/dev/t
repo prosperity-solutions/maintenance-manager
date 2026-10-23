@@ -1,0 +1,5 @@
+#!/bin/sh
+# Run a pinned tool: scripts/dev/t <name> [args...]. Tools live in tools/go.mod,
+# or in tools/<name>/go.mod when their dependencies clash (docs/HANDOVER.md §14).
+d=$(cd "$(dirname "$0")/../../tools" && pwd) && m=$d/go.mod && { [ ! -f "$d/$1/go.mod" ] || m=$d/$1/go.mod; }
+exec go tool -modfile="$m" "$@"

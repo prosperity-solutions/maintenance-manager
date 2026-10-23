@@ -1,0 +1,50 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push --force)",
+      "Bash(git push --force *)",
+      "Bash(git push * --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git tag *)",
+      "Bash(gh repo edit*)",
+      "Bash(gh repo delete*)",
+      "Bash(gh repo archive*)",
+      "Bash(gh repo rename*)",
+      "Bash(gh release delete*)",
+      "Bash(gh secret *)",
+      "Bash(gh variable *)",
+      "Bash(gh ruleset *)",
+      "Bash(gh pr merge *--admin*)",
+      "Bash(gh pr review *--approve*)",
+      "Bash(gh pr review *-a *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/scripts/dev/agent-guard.sh",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/notes/progress.md\"; if [ -f \"$f\" ]; then echo '## notes/progress.md (run memory; the Next section names the next milestone, docs/HANDOVER.md §22)'; cat \"$f\"; else echo 'No notes/progress.md yet. Run plan: docs/HANDOVER.md §0 and §22.'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

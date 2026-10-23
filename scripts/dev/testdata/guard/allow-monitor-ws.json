@@ -1,0 +1,11 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Monitor",
+    "tool_input": {
+      "ws": "wss://example.invalid"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "expect": "allow",
+  "bootstrap_done": false,
+  "branch": "main",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git push -u origin main"
+    }
+  }
+}

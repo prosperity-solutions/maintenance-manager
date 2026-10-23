@@ -1,0 +1,46 @@
+# Version updates, never the day a release ships: `cooldown` waits seven days
+# after a release before proposing it. Security updates are not delayed.
+# tools/depage enforces the same rule for anything pinned by hand
+# (docs/HANDOVER.md §17.3). Dependabot PRs are the owner's to merge (A9).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /tools
+      - /tools/actionlint
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+    groups:
+      go-modules:
+        patterns: ["*"]
+    # Pins moved deliberately, not by bot. Without these the PRs stay red and pile up.
+    ignore:
+      - dependency-name: github.com/envoyproxy/gateway
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: k8s.io/*
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: sigs.k8s.io/controller-runtime
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # lefthook >= 2.2 needs Go 1.27; the toolchain is Go 1.26.
+      - dependency-name: github.com/evilmartians/lefthook/v2
+        versions: [">= 2.2.0"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci(deps)"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,16 @@
+# ko builds the image (docs/HANDOVER.md §16.2). The base image is pinned by
+# digest; moving it is a reviewed manual change (§17.3).
+defaultBaseImage: gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+defaultPlatforms:
+  - linux/amd64
+  - linux/arm64
+builds:
+  - id: maintenance-manager
+    main: ./cmd/maintenance-manager
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Env.VERSION}}

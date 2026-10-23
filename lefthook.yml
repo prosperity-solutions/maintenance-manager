@@ -1,0 +1,14 @@
+# Git hooks. Install once per clone: scripts/dev/t lefthook install
+#
+# The gate lives on push, not per commit: CI does not run on a draft PR, so this
+# local pre-pass is the only signal a draft gets before it is marked ready
+# (docs/agentic-review.md §1.1). Skipping it is blocked by the agent guard.
+lefthook: scripts/dev/t lefthook
+pre-push:
+  jobs:
+    - name: pre-pass
+      run: test -z "$(gofmt -l .)" && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && { [ ! -d client ] || node --test client/; }
+      fail_text: |
+        The pre-pass is red: gofmt, go vet, golangci-lint and the tests must pass
+        before a push, because CI runs nothing on a draft PR. Run the command in
+        lefthook.yml, fix what it reports, and push again.

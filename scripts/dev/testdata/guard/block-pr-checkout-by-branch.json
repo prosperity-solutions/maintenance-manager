@@ -1,0 +1,15 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr checkout some-branch"
+    }
+  },
+  "gh": {
+    "login": "me",
+    "authors": {}
+  }
+}

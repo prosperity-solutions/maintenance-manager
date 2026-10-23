@@ -1,0 +1,17 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git fetch origin pull/8/head:pr8"
+    }
+  },
+  "gh": {
+    "login": "me",
+    "authors": {
+      "8": "stranger"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr diff 8"
+    }
+  },
+  "gh": {
+    "login": "me",
+    "authors": {
+      "8": "stranger"
+    }
+  }
+}

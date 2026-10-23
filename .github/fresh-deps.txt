@@ -1,0 +1,7 @@
+# Versions allowed although they are younger than seven days (tools/depage), one per line:
+#
+#   <module path>@<version>   # the advisory it fixes
+#   toolchain@go1.X.Y         # the advisory it fixes
+#
+# A version that is old enough needs no line. Remove a line once the version is a week old.
+toolchain@go1.26.10   # GO-2026-6809: crypto/x509 distrusts compromised intermediate certificates (fixed in go1.26.10)

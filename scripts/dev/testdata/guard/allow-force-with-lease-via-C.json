@@ -1,0 +1,11 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git -C .claude/worktrees/b1 push --force-with-lease origin feat/x"
+    }
+  }
+}
