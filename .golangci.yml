@@ -24,4 +24,4 @@ linters:
       # with ordinary permissions.
       - path: (_test\.go|^test/)
         linters: [gosec]
-        text: "G(204|30[146])"
+        text: "G(101|204|30[146])"

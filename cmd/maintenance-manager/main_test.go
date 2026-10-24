@@ -32,11 +32,9 @@ func TestParseServe(t *testing.T) {
 	if cfg.Namespace != "mm" || cfg.ArmingLeadTime != 5*time.Minute || cfg.MetricsAddr != ":8081" {
 		t.Fatalf("unexpected config %+v", cfg)
 	}
-	if cfg, err := parseServe([]string{"--e2e-block-route=shop/web"}); err != nil || cfg.BlockRoute == nil || cfg.BlockRoute.Name != "web" {
-		t.Fatalf("--e2e-block-route: %+v, %v", cfg, err)
-	}
-	if _, err := parseServe([]string{"--e2e-block-route=web"}); err == nil {
-		t.Fatal("--e2e-block-route without a namespace must be an error")
+	t.Setenv("MM_BYPASS_TOKEN", "0123456789abcdef")
+	if cfg, err := parseServe(nil); err != nil || cfg.Bypass != "0123456789abcdef" {
+		t.Fatalf("bypass token from MM_BYPASS_TOKEN: %+v, %v", cfg, err)
 	}
 	if _, err := parseServe([]string{"--arming-lead-time=-1s"}); err == nil {
 		t.Fatal("negative lead time must be an error")

@@ -4,13 +4,12 @@ import (
 	"strings"
 
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
+
+	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
-// RouteKey identifies the HTTPRoute Envoy matched. It is the key into the
-// snapshot's route map (§5.2).
-type RouteKey struct {
-	Namespace, Name string
-}
+// RouteKey identifies the HTTPRoute Envoy matched (§5.2).
+type RouteKey = snapshot.RouteKey
 
 // envoyGatewayMetadata is the filter-metadata namespace Envoy Gateway fills
 // when the SecurityPolicy sets includeRouteMetadata (EG ≥ 1.8).
@@ -34,15 +33,6 @@ func routeKey(req *authv3.CheckRequest) (RouteKey, bool) {
 		return RouteKey{}, false
 	}
 	return k, true
-}
-
-// ParseRouteKey parses "namespace/name".
-func ParseRouteKey(s string) (RouteKey, bool) {
-	ns, name, ok := strings.Cut(s, "/")
-	if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
-		return RouteKey{}, false
-	}
-	return RouteKey{Namespace: ns, Name: name}, true
 }
 
 // wantsHTML reports whether the request is a browser page load: GET or HEAD
