@@ -43,12 +43,11 @@ func routeKey(req *authv3.CheckRequest) (RouteKey, bool) {
 // the ext_authz filter does not set encode_raw_headers; Envoy Gateway v1.8.3
 // and v1.9.1 never set it. With it, headers would be empty and every browser
 // would get problem+json.
-func wantsHTML(http *authv3.AttributeContext_HttpRequest) bool {
-	m := http.GetMethod()
-	if m != "GET" && m != "HEAD" {
+func wantsHTML(method, accept string) bool {
+	if method != "GET" && method != "HEAD" {
 		return false
 	}
-	return containsFold(http.GetHeaders()["accept"], "text/html")
+	return containsFold(accept, "text/html")
 }
 
 // containsFold is strings.Contains ignoring ASCII case, without allocating.

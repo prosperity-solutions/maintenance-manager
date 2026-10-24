@@ -24,6 +24,7 @@ import (
 func removeOurs(t *testing.T, appNS string) {
 	t.Cleanup(func() {
 		_ = k8s.DeleteAllOf(context.Background(), &egv1a1.SecurityPolicy{}, client.InNamespace(appNS), client.MatchingLabels{LabelOwner: releaseNS})
+		_ = k8s.DeleteAllOf(context.Background(), &egv1a1.EnvoyExtensionPolicy{}, client.InNamespace(appNS), client.MatchingLabels{LabelOwner: releaseNS})
 		_ = k8s.DeleteAllOf(context.Background(), &gwapiv1b1.ReferenceGrant{}, client.InNamespace(releaseNS), client.MatchingLabels{LabelOwner: releaseNS})
 	})
 }
@@ -31,6 +32,8 @@ func removeOurs(t *testing.T, appNS string) {
 func TestEnvtestSquatterBlocksOnlyItsNamespace(t *testing.T) {
 	// A foreign SecurityPolicy with our name in "aaa" (sorts first) must not
 	// stop "shop" from being armed: errors and conflicts stay per namespace.
+	// aaa's route goes to our EnvoyExtensionPolicy instead; a squatter on that
+	// name too makes it a conflict.
 	now := time.Date(2026, 10, 30, 16, 0, 0, 0, time.UTC)
 	_ = k8s.Create(t.Context(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "aaa"}})
 	create(t, &mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Namespace: releaseNS, Name: "all"},
@@ -44,14 +47,25 @@ func TestEnvtestSquatterBlocksOnlyItsNamespace(t *testing.T) {
 	create(t, &mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: releaseNS, Name: "sq"}, Spec: mmv1.MaintenanceWindowSpec{
 		Enabled: true, Phases: []mmv1.Phase{{Name: "down", Action: mmv1.ActionBlock, Routings: []mmv1.Routing{{Services: []string{"all"}}}}}}})
 	removeOurs(t, "shop")
+	removeOurs(t, "aaa")
 
 	r, rec := newReconciler(t, now)
 	res := reconcile(t, r)
 	if sp := getSP(t, "shop"); sp == nil || targets(sp) != "sq" {
 		t.Fatalf("shop must be armed despite the squatter in aaa (ops %v)", rec.take())
 	}
+	if eep := getEEP(t, "aaa"); eep == nil || extTargets(eep) != "web" {
+		t.Fatalf("aaa/web must be armed through our EnvoyExtensionPolicy: %v", res.Desired)
+	}
+	extSquatter := &egv1a1.EnvoyExtensionPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "aaa", Name: SPName(releaseNS)}}
+	extSquatter.Spec.TargetRefs = squatter.Spec.TargetRefs
+	if err := k8s.Delete(t.Context(), getEEP(t, "aaa")); err != nil {
+		t.Fatal(err)
+	}
+	create(t, extSquatter)
+	res = reconcile(t, r)
 	if _, conflict := res.Desired.Conflicts[snapshot.RouteKey{Namespace: "aaa", Name: "web"}]; !conflict {
-		t.Fatalf("aaa/web must be reported as a conflict: %v", res.Desired.Conflicts)
+		t.Fatalf("both names squatted: aaa/web must be reported as a conflict: %v", res.Desired.Conflicts)
 	}
 	var sq egv1a1.SecurityPolicy
 	if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(squatter), &sq); err != nil || sq.Spec.CORS == nil {
@@ -94,8 +108,8 @@ func TestEnvtestNamespaceSelector(t *testing.T) {
 			_ = k8s.Update(context.Background(), &n)
 		}
 	})
-	if res := reconcile(t, r); len(res.Desired.Conflicts) != 1 {
-		t.Fatalf("a matching namespace selector must conflict: %v", res.Desired.Conflicts)
+	if res := reconcile(t, r); len(res.Desired.ExtRoutes["shop"]) != 1 || len(res.Desired.Routes["shop"]) != 0 {
+		t.Fatalf("a matching namespace selector takes the SecurityPolicy slot: the route moves to the EnvoyExtensionPolicy: %v", res.Desired)
 	}
 }
 
@@ -154,7 +168,7 @@ func TestEnvtestGrantDriftRepaired(t *testing.T) {
 	if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(stale), &g); err != nil {
 		t.Fatal(err)
 	}
-	if g.Labels[LabelOwner] != releaseNS || len(g.Spec.From) != 1 || g.Spec.From[0].Namespace != "shop" {
+	if g.Labels[LabelOwner] != releaseNS || len(g.Spec.From) != 2 || g.Spec.From[0].Namespace != "shop" || g.Spec.From[1].Kind != "EnvoyExtensionPolicy" {
 		t.Fatalf("the grant must be repaired, got labels %v from %v (ops %v)", g.Labels, g.Spec.From, rec.take())
 	}
 	if getSP(t, "shop") == nil {

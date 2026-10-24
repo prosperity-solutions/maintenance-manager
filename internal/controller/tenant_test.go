@@ -29,8 +29,13 @@ func TestDesiredSquatterBlocksNamespace(t *testing.T) {
 	in := baseInput()
 	in.Blocked = map[string]string{"shop": "squatted"}
 	d := ComputeDesired(in)
-	if len(d.Routes) != 0 || len(d.Conflicts) != 2 {
-		t.Fatalf("a blocked namespace arms nothing and reports every route: %v %v", d.Routes, d.Conflicts)
+	if len(d.Routes) != 0 || len(d.ExtRoutes["shop"]) != 2 || len(d.Conflicts) != 0 {
+		t.Fatalf("a squatted SecurityPolicy name moves the namespace to the EnvoyExtensionPolicy: %v %v %v", d.Routes, d.ExtRoutes, d.Conflicts)
+	}
+	in.BlockedExt = map[string]string{"shop": "squatted too"}
+	d = ComputeDesired(in)
+	if len(d.Routes) != 0 || len(d.ExtRoutes) != 0 || len(d.Conflicts) != 2 {
+		t.Fatalf("both names squatted: arms nothing and reports every route: %v %v %v", d.Routes, d.ExtRoutes, d.Conflicts)
 	}
 }
 

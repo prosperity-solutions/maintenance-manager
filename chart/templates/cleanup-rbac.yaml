@@ -62,7 +62,7 @@ subjects:
     name: maintenance-manager-cleanup
     namespace: {{ .Release.Namespace }}
 ---
-# Our SecurityPolicies live in app namespaces: list cluster-wide, delete ours.
+# Our policies live in app namespaces: list cluster-wide, delete ours.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -75,10 +75,10 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 rules:
   - apiGroups: [gateway.envoyproxy.io]
-    resources: [securitypolicies]
+    resources: [securitypolicies, envoyextensionpolicies]
     verbs: [list]
   - apiGroups: [gateway.envoyproxy.io]
-    resources: [securitypolicies]
+    resources: [securitypolicies, envoyextensionpolicies]
     resourceNames: [{{ printf "mm-%s" (sha256sum .Release.Namespace | trunc 8) }}]
     verbs: [delete]
 ---

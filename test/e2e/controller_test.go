@@ -108,8 +108,10 @@ func TestE6GatewayPolicyMerges(t *testing.T) {
 	})
 }
 
-// E7: a foreign route-level SecurityPolicy takes the route out of ours; the
-// foreign policy works, and our other route stays gated.
+// E7: a foreign route-level SecurityPolicy takes the route out of our
+// SecurityPolicy and onto our EnvoyExtensionPolicy (§5.3); the foreign policy
+// works on it, the route stays blocked, and our other route stays on the
+// SecurityPolicy.
 func TestE7ForeignRoutePolicy(t *testing.T) {
 	ns := "e7"
 	newApp(t, ns)
@@ -136,14 +138,16 @@ func TestE7ForeignRoutePolicy(t *testing.T) {
 
 	t0 := time.Now()
 	securityPolicy(t, ns, "foreign", map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "web"})
-	waitArmed(t, ns, "api") // web leaves our targets: an update, so no drain
+	waitArmed(t, ns, "api") // web leaves our SecurityPolicy: an update, so no drain
+	waitArmedVia(t, "EnvoyExtensionPolicy", ns, "web")
 	waitPolicyAccepted(t, ns, "foreign")
-	t.Logf("route removed and the foreign policy accepted %s after it appeared", time.Since(t0).Round(100*time.Millisecond))
-	waitStable(t, 2*time.Minute, 3, "web runs the foreign policy, api stays blocked", func() (bool, string) {
-		w := get(ns, "/", browser, map[string]string{"Origin": "https://app.example"})
+	t.Logf("route moved and the foreign policy accepted %s after it appeared", time.Since(t0).Round(100*time.Millisecond))
+	waitStable(t, 2*time.Minute, 3, "web runs the foreign policy and stays blocked, api stays blocked", func() (bool, string) {
+		pre := do("OPTIONS", ns, "/", "", map[string]string{"Origin": "https://app.example", "Access-Control-Request-Method": "GET"})
+		w := get(ns, "/", browser, nil)
 		a := get("e7-api", "/", browser, nil)
-		return fromEcho(w, ns) && w.header.Get("Access-Control-Allow-Origin") == "https://app.example" && a.status == 503,
-			w.String() + " | " + a.String()
+		return pre.header.Get("Access-Control-Allow-Origin") == "https://app.example" && w.status == 503 && a.status == 503,
+			"preflight " + pre.String() + " | " + w.String() + " | " + a.String()
 	})
 }
 

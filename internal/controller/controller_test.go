@@ -22,7 +22,7 @@ func kinds(as []Action) string {
 	var out []string
 	for _, a := range as {
 		s := string(a.Kind) + ":" + a.Namespace
-		if a.Kind == EnsureSP {
+		if a.Kind == EnsureSP || a.Kind == EnsureEEP {
 			s += "[" + strings.Join(a.Targets, ",") + "]"
 		}
 		out = append(out, s)

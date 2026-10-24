@@ -9,15 +9,18 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
 type dashRoute struct {
 	Namespace, Name string
-	Armed           string // "yes" (our SecurityPolicy targets it), "pending" (the leader has yet to write it) or "no"
+	Armed           string // "yes" (one of our policies targets it), "pending" (the leader has yet to write it) or "no"
+	Extension       bool   // armed through our EnvoyExtensionPolicy, not our SecurityPolicy
 	Accepted        string // "yes", "no" or "" (not armed / unknown)
 	AcceptedWhy     string
 	Conflicts       []string
+	Via             string // why it is (to be) armed through the EnvoyExtensionPolicy
 }
 
 type dashPhase struct {
@@ -73,9 +76,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		d.ViewErr = verr.Error()
 	}
 	desired := map[snapshot.RouteKey]bool{}
-	for ns, names := range view.Desired.Routes {
-		for _, n := range names {
-			desired[snapshot.RouteKey{Namespace: ns, Name: n}] = true
+	for _, m := range []map[string][]string{view.Desired.Routes, view.Desired.ExtRoutes} {
+		for ns, names := range m {
+			for _, n := range names {
+				desired[snapshot.RouteKey{Namespace: ns, Name: n}] = true
+			}
 		}
 	}
 
@@ -119,16 +124,18 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		if dw.State == StateArmed || dw.State == StateActive {
 			for _, rt := range snapshot.WindowRoutes(&mw.Spec, selectors, infos) {
-				dr := dashRoute{Namespace: rt.Key.Namespace, Name: rt.Key.Name, Armed: "no", Conflicts: view.Conflicts[rt.Key]}
+				dr := dashRoute{Namespace: rt.Key.Namespace, Name: rt.Key.Name, Armed: "no", Conflicts: view.Conflicts[rt.Key], Via: view.Via[rt.Key]}
+				kind := view.Targets[rt.Key.Namespace][rt.Key.Name]
 				switch {
 				case verr != nil:
 					dr.Armed = "unknown"
-				case view.Targets[rt.Key.Namespace][rt.Key.Name]:
+				case kind != "":
 					dr.Armed = "yes"
+					dr.Extension = kind == controller.ExtensionPolicyGVK.Kind
 				case desired[rt.Key]:
 					dr.Armed = "pending"
 				}
-				if acc, ok := view.Accepted[rt.Key.Namespace]; ok && dr.Armed == "yes" {
+				if acc, ok := view.Accepted[controller.PolicyRef{Namespace: rt.Key.Namespace, Kind: kind}]; ok && dr.Armed == "yes" {
 					dr.Accepted, dr.AcceptedWhy = "no", acc.Reason
 					if acc.OK {
 						dr.Accepted, dr.AcceptedWhy = "yes", ""

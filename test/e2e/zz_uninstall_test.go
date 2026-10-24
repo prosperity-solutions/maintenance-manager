@@ -14,18 +14,27 @@ import (
 	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
 )
 
-// E9: helm uninstall leaves zero SecurityPolicies and zero ReferenceGrants.
+// E9: helm uninstall leaves zero SecurityPolicies, EnvoyExtensionPolicies
+// and ReferenceGrants. A second app whose route a platform policy holds puts
+// one of each in place first.
 // It removes maintenance-manager, so it runs last (Go runs test files in name
 // order; this file sorts last).
 func TestE9Uninstall(t *testing.T) {
 	ns := "e9"
 	maintenance(t, ns, nil, mmv1.Phase{Name: "down", Action: mmv1.ActionBlock})
+	ext := "e9-ext"
+	newApp(t, ext)
+	allowAllPolicy(t, ext, "web")
+	svc, pg := service(t, ext), page(t, ext)
+	create(t, &mmv1.MaintenanceWindow{ObjectMeta: objMeta(ext), Spec: mmv1.MaintenanceWindowSpec{Enabled: true,
+		Phases: []mmv1.Phase{{Name: "down", Action: mmv1.ActionBlock, Routings: []mmv1.Routing{{Services: []string{svc}, Page: pg}}}}}})
+	waitArmedVia(t, "EnvoyExtensionPolicy", ext, "web")
 
 	ctx := t.Context()
 	if err := tool(ctx, "helm", "uninstall", "mm", "--kubeconfig", kubeFile, "-n", mmNamespace, "--wait", "--timeout", "5m"); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"SecurityPolicyList", "ReferenceGrantList"} {
+	for _, kind := range []string{"SecurityPolicyList", "EnvoyExtensionPolicyList", "ReferenceGrantList"} {
 		group, version := "gateway.envoyproxy.io", "v1alpha1"
 		if kind == "ReferenceGrantList" {
 			group, version = "gateway.networking.k8s.io", "v1beta1"

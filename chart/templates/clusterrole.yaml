@@ -1,5 +1,5 @@
-# Cluster-wide: read routes and their parents, and own SecurityPolicies in
-# app namespaces. docs/HANDOVER.md §11.
+# Cluster-wide: read routes and their parents, and own SecurityPolicies and
+# EnvoyExtensionPolicies in app namespaces. docs/HANDOVER.md §11.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -13,13 +13,13 @@ rules:
   - apiGroups: [gateway.networking.x-k8s.io]
     resources: [xlistenersets]
     verbs: [get, list, watch]
-  # Read every SecurityPolicy (conflicts, §5.3) and create ours; change or
-  # delete only ours, which always has this one name.
+  # Read every SecurityPolicy and EnvoyExtensionPolicy (conflicts, §5.3) and
+  # create ours; change or delete only ours, which always have this one name.
   - apiGroups: [gateway.envoyproxy.io]
-    resources: [securitypolicies]
+    resources: [securitypolicies, envoyextensionpolicies]
     verbs: [get, list, watch, create]
   - apiGroups: [gateway.envoyproxy.io]
-    resources: [securitypolicies]
+    resources: [securitypolicies, envoyextensionpolicies]
     resourceNames: [{{ printf "mm-%s" (sha256sum .Release.Namespace | trunc 8) }}]
     verbs: [update, patch, delete]
   # targetSelectors with namespaces.from: Selector match on namespace labels.

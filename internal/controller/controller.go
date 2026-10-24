@@ -242,8 +242,11 @@ func (c *Controller) term(ctx context.Context) error {
 	grant.SetGroupVersionKind(ReferenceGrantGVK)
 	byObject := map[client.Object]cache.ByObject{
 		grant: {Namespaces: map[string]cache.Config{c.Namespace: {}}},
+		// Foreign EnvoyExtensionPolicies matter only for their targets; their
+		// Lua, Wasm and ext_proc configs are not kept in memory.
+		&egv1a1.EnvoyExtensionPolicy{}: {Transform: stripForeignExtension(c.Namespace)},
 	}
-	objs := []client.Object{&egv1a1.SecurityPolicy{}, &gwapiv1.Gateway{}, &corev1.Namespace{}, grant}
+	objs := []client.Object{&egv1a1.SecurityPolicy{}, &egv1a1.EnvoyExtensionPolicy{}, &gwapiv1.Gateway{}, &corev1.Namespace{}, grant}
 	var lsLists []*unstructured.UnstructuredList
 	kinds, err := c.servedListenerSets()
 	if err != nil {
@@ -318,7 +321,7 @@ func (c *Controller) term(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		c.Log.Warn("controller caches have not synced after 30 s; nothing is armed meanwhile. Check RBAC on securitypolicies, gateways, listenersets, namespaces (cluster-wide) and referencegrants (release namespace)")
+		c.Log.Warn("controller caches have not synced after 30 s; nothing is armed meanwhile. Check RBAC on securitypolicies, envoyextensionpolicies, gateways, listenersets, namespaces (cluster-wide) and referencegrants (release namespace)")
 		if round >= syncRounds {
 			return fmt.Errorf("caches did not sync in %d rounds", round)
 		}
@@ -415,19 +418,12 @@ func (c *Controller) reconcileOnce(ctx context.Context, rec *Reconciler) (res Re
 	c.logConflicts(res.Desired.Conflicts)
 	metrics.Writes.Add(float64(res.Writes))
 	if err == nil { // a failed read leaves Desired partial: keep the last good values
-		armedNow := 0
-		for _, rs := range res.Desired.Routes {
-			armedNow += len(rs)
-		}
-		metrics.ArmedRoutes.Set(float64(armedNow))
+		metrics.ArmedRoutes.Set(float64(armedCount(res.Desired)))
 		metrics.Conflicts.Set(float64(len(res.Desired.Conflicts)))
 	}
 	if err == nil && res.Writes > 0 {
-		armed := 0
-		for _, rs := range res.Desired.Routes {
-			armed += len(rs)
-		}
-		c.Log.Info("reconciled", "namespaces", len(res.Desired.Routes), "armedRoutes", armed, "conflicts", len(res.Desired.Conflicts), "writes", res.Writes)
+		c.Log.Info("reconciled", "namespaces", armedNamespaces(res.Desired), "armedRoutes", armedCount(res.Desired),
+			"viaExtensionPolicy", len(res.Desired.Via), "conflicts", len(res.Desired.Conflicts), "writes", res.Writes)
 	}
 	return res, err
 }
@@ -465,4 +461,47 @@ func reset(t *time.Timer, d time.Duration) {
 	default:
 	}
 	t.Reset(d)
+}
+
+// stripForeignExtension keeps foreign EnvoyExtensionPolicies small in the
+// cache: the conflict check reads only their targets, so their Lua, Wasm
+// and ext_proc configs and their status are dropped. Ours stay whole (drift
+// check, Envoy Accepted).
+func stripForeignExtension(releaseNS string) toolscache.TransformFunc {
+	return func(obj any) (any, error) {
+		eep, ok := obj.(*egv1a1.EnvoyExtensionPolicy)
+		if !ok {
+			return obj, nil
+		}
+		eep.ManagedFields = nil
+		if eep.Name == SPName(releaseNS) && eep.Labels[LabelOwner] == releaseNS {
+			return eep, nil
+		}
+		var zero egv1a1.EnvoyExtensionPolicy
+		eep.Spec = egv1a1.EnvoyExtensionPolicySpec{PolicyTargetReferences: eep.Spec.PolicyTargetReferences}
+		eep.Status = zero.Status
+		return eep, nil
+	}
+}
+
+// armedCount is the number of routes armed through either policy.
+func armedCount(d Desired) int {
+	n := 0
+	for _, m := range []map[string][]string{d.Routes, d.ExtRoutes} {
+		for _, rs := range m {
+			n += len(rs)
+		}
+	}
+	return n
+}
+
+// armedNamespaces is the number of app namespaces with an armed route.
+func armedNamespaces(d Desired) int {
+	ns := map[string]bool{}
+	for _, m := range []map[string][]string{d.Routes, d.ExtRoutes} {
+		for n := range m {
+			ns[n] = true
+		}
+	}
+	return len(ns)
 }

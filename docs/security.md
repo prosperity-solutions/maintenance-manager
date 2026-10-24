@@ -68,8 +68,16 @@ produce an attestation that passes this.
   failing open.
 - **Metrics carry no host, route or window names**, so scraping them leaks
   nothing about which apps exist.
-- **RBAC is narrow:** SecurityPolicies may only be updated or deleted under our
-  own name, the uninstall hook has its own ServiceAccount, and the pods write no
+- **Routes armed through the EnvoyExtensionPolicy send every request header to
+  authz** (ext_proc has no header list), Authorization and cookies included.
+  authz reads six of them (method, path, accept, accept-language, cookie, the
+  bypass header), keeps none after the decision and logs none. The platform's
+  authentication on such a route runs before authz, and an external auth
+  service there receives the bypass header (ext_authz forwards every header by
+  default) before authz removes it: rotate the token if that service should
+  not hold it.
+- **RBAC is narrow:** SecurityPolicies and EnvoyExtensionPolicies may only be
+  updated or deleted under our own name, the uninstall hook has its own ServiceAccount, and the pods write no
   Events.
 
 ## Walls (a hostile PR cannot remove them)

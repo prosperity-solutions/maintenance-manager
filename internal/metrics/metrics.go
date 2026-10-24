@@ -11,7 +11,7 @@ const ns = "maintenance_manager"
 var (
 	checks = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: ns, Name: "check_total",
-		Help: "ext_authz Check() answers, by result.",
+		Help: "Answers to Envoy (ext_authz Check() and ext_proc), by result.",
 	}, []string{"result"})
 
 	// Check() results, resolved once.
@@ -24,6 +24,7 @@ var (
 	CheckBlockHTML        = checks.WithLabelValues("block_html")        // 503 page
 	CheckBlockProblem     = checks.WithLabelValues("block_problem")     // 503 problem+json
 	CheckStatus           = checks.WithLabelValues("status")            // /__maintenance-manager/status
+	CheckError            = checks.WithLabelValues("error")             // an ext_proc request that could not be read: Envoy fails open
 
 	SnapshotBuilds = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: ns, Name: "snapshot_builds_total",

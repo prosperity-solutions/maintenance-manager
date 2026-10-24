@@ -1,7 +1,9 @@
-// Package authz serves Envoy's gRPC ext_authz Check() (docs/HANDOVER.md §6).
+// Package authz serves Envoy's gRPC ext_authz Check() and, for routes armed
+// through an EnvoyExtensionPolicy, ext_proc Process() (docs/HANDOVER.md §6).
 //
 // The hot path does no I/O, takes no locks and logs nothing per request. Every
-// answer is a precomputed, shared *CheckResponse: gRPC only reads it.
+// answer is precomputed and shared (a CheckResponse or a ProcessingResponse):
+// gRPC only reads it.
 package authz
 
 import (
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
+	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -38,9 +41,10 @@ const gracefulStopTimeout = 5 * time.Second
 // (§11 SIGTERM: fail /readyz, keep serving 10 s, then GracefulStop).
 const DrainDelay = 10 * time.Second
 
-// maxRecvMsgSize bounds a CheckRequest. Envoy sends only the headers listed
-// in headersToExtAuth and never the body, so 64 KiB is generous.
-const maxRecvMsgSize = 64 << 10
+// maxRecvMsgSize bounds one request message. ext_authz sends only the headers
+// listed in headersToExtAuth; ext_proc sends every request header (never the
+// body), and Envoy caps request headers at 60 KiB by default.
+const maxRecvMsgSize = 128 << 10
 
 // okResponse lets a request through, untouched.
 var okResponse = &authv3.CheckResponse{
@@ -80,74 +84,113 @@ func (s *Server) Ready() bool { return s.tbl.Load() != nil }
 // logging: every answer is a precomputed response from the current table.
 func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.CheckResponse, error) {
 	http := req.GetAttributes().GetRequest().GetHttp()
-	headers := http.GetHeaders()
-	tbl := s.tbl.Load()
-	if tbl == nil { // not ready: fail open, but never forward a bypass token
-		metrics.CheckNotReady.Inc()
-		if _, ok := headers[bypassHeader]; ok {
+	h := http.GetHeaders()
+	key, found := routeKey(req)
+	token, hasBypass := h[bypassHeader]
+	v := s.decide(key, found, reqInfo{
+		method: http.GetMethod(), path: http.GetPath(),
+		accept: h["accept"], acceptLanguage: h["accept-language"], cookie: h["cookie"],
+		bypass: token, hasBypass: hasBypass,
+	})
+	switch v.kind {
+	case verdictPass:
+		if v.strip {
 			return okStripResponse, nil
 		}
 		return okResponse, nil
+	case verdictInfo:
+		return v.d.passFor(v.strip), nil
 	}
-	path, query, _ := strings.Cut(http.GetPath(), "?")
+	return v.answer.authz, nil
+}
 
-	token, hasBypassHdr := headers[bypassHeader]
-	bypass := hasBypassHdr && tbl.bypass != "" && constantTimeEqual(token, tbl.bypass)
-	ok := okResponse
-	if hasBypassHdr {
-		ok = okStripResponse
+// verdictKind says how a request is answered; each protocol maps it to its
+// own precomputed response.
+type verdictKind uint8
+
+const (
+	verdictPass   verdictKind = iota // to the app, untouched
+	verdictInfo                      // to the app, with X-Maintenance-Manager on the response
+	verdictAnswer                    // answered here: page, problem+json or status
+)
+
+type verdict struct {
+	kind   verdictKind
+	strip  bool // a bypass header came in: remove it before the app
+	d      *decision
+	answer answer
+}
+
+// reqInfo is what a decision reads from a request.
+type reqInfo struct {
+	method, path                   string // path with the query
+	accept, acceptLanguage, cookie string
+	bypass                         string
+	hasBypass                      bool // the bypass header came, even empty
+}
+
+// decide is the decision of §6, shared by Check() and ext_proc. It allocates
+// nothing and keeps no reference to r after it returns.
+func (s *Server) decide(key RouteKey, found bool, r reqInfo) verdict {
+	hasBypassHdr := r.hasBypass
+	tbl := s.tbl.Load()
+	if tbl == nil { // not ready: fail open, but never forward a bypass token
+		metrics.CheckNotReady.Inc()
+		return verdict{kind: verdictPass, strip: hasBypassHdr}
 	}
+	pass := verdict{kind: verdictPass, strip: hasBypassHdr}
+	path, query, _ := strings.Cut(r.path, "?")
+	bypass := hasBypassHdr && tbl.bypass != "" && constantTimeEqual(r.bypass, tbl.bypass)
 
-	key, found := routeKey(req)
 	if !found {
 		metrics.CheckPass.Inc()
-		return ok, nil
+		return pass
 	}
 	timeline := tbl.routes[key]
 	if timeline == nil {
 		metrics.CheckPass.Inc()
-		return ok, nil
+		return pass
 	}
-	now := s.now()
-	d := at(timeline, now)
+	d := at(timeline, s.now())
 
 	// "//__maintenance-manager/status" too, in case :path was not normalized.
 	if path == statusPath || (len(path) > len(statusPath) && strings.TrimLeft(path, "/") == statusPath[1:]) {
 		metrics.CheckStatus.Inc()
-		return statusFor(d, http.GetMethod(), query, headers["accept-language"], bypass), nil
+		return verdict{kind: verdictAnswer, answer: statusFor(d, r.method, query, r.acceptLanguage, bypass)}
 	}
 	if bypass {
 		metrics.CheckBypass.Inc()
-		return ok, nil
+		return pass
 	}
 	if d == nil {
 		metrics.CheckPass.Inc()
-		return ok, nil
+		return pass
 	}
 
-	html := wantsHTML(http)
+	html := wantsHTML(r.method, r.accept)
+	info := verdict{kind: verdictInfo, strip: hasBypassHdr, d: d}
 	switch d.action {
 	case mmv1.ActionBanner:
 		metrics.CheckBanner.Inc()
-		return d.passFor(hasBypassHdr), nil
+		return info
 	case mmv1.ActionInterstitial:
-		if !html || cookieValue(headers["cookie"], d.cookiePrefix) == d.phaseKey {
+		if !html || cookieValue(r.cookie, d.cookiePrefix) == d.phaseKey {
 			metrics.CheckInterstitialPass.Inc()
-			return d.passFor(hasBypassHdr), nil
+			return info
 		}
 		metrics.CheckInterstitialPage.Inc()
-		return d.page[d.locales.Resolve("", headers["accept-language"])], nil
+		return verdict{kind: verdictAnswer, answer: d.page[d.locales.Resolve("", r.acceptLanguage)]}
 	case mmv1.ActionBlock:
-		loc := d.locales.Resolve("", headers["accept-language"])
+		loc := d.locales.Resolve("", r.acceptLanguage)
 		if html {
 			metrics.CheckBlockHTML.Inc()
-			return d.page[loc], nil
+			return verdict{kind: verdictAnswer, answer: d.page[loc]}
 		}
 		metrics.CheckBlockProblem.Inc()
-		return d.problem[loc], nil
+		return verdict{kind: verdictAnswer, answer: d.problem[loc]}
 	}
 	metrics.CheckPass.Inc()
-	return ok, nil
+	return pass
 }
 
 func (s *Server) now() time.Time {
@@ -175,7 +218,7 @@ func at(timeline []*decision, t time.Time) *decision {
 }
 
 // statusFor answers GET/HEAD /__maintenance-manager/status (§7).
-func statusFor(d *decision, method, query, acceptLanguage string, bypass bool) *authv3.CheckResponse {
+func statusFor(d *decision, method, query, acceptLanguage string, bypass bool) answer {
 	head := method == "HEAD"
 	if !head && method != "GET" {
 		return statusMethod
@@ -266,6 +309,7 @@ func (s *Server) Start(ctx context.Context) error {
 		grpc.MaxConcurrentStreams(1024),
 	)
 	authv3.RegisterAuthorizationServer(srv, s)
+	extprocv3.RegisterExternalProcessorServer(srv, procServer{s: s})
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(lis) }()

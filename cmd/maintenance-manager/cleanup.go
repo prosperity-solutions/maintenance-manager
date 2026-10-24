@@ -41,6 +41,6 @@ func cleanup(log *slog.Logger) int {
 		log.Error("cleanup failed; run it again, it is safe to repeat", "err", err)
 		return 1
 	}
-	log.Info("cleanup done: no SecurityPolicies or ReferenceGrants of this install remain")
+	log.Info("cleanup done: no SecurityPolicies, EnvoyExtensionPolicies or ReferenceGrants of this install remain")
 	return 0
 }

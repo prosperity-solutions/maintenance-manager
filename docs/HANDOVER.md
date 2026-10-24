@@ -206,11 +206,11 @@ spec:
 
 ## 5. Hooking into Envoy (controller)
 
-### 5.1 One SecurityPolicy per namespace
+### 5.1 One SecurityPolicy per namespace (and one EnvoyExtensionPolicy where needed)
 
-A route is **armed** when a `MaintenanceService` referenced by an armed window matches it and it has no conflict (§5.3).
+A route is **armed** when a `MaintenanceService` referenced by an armed window matches it and one of our two policies can take it (§5.3).
 
-For each namespace with ≥ 1 armed route, the controller writes exactly one SP (field manager `maintenance-manager`):
+For each namespace with ≥ 1 route armed through it, the controller writes exactly one SP (field manager `maintenance-manager`):
 
 ```yaml
 apiVersion: gateway.envoyproxy.io/v1alpha1
@@ -243,21 +243,44 @@ spec:
     # bodyToExtAuth must stay unset (no request buffering). recomputeRoute stays unset.
 ```
 
+**As built (EnvoyExtensionPolicy fallback):** routes whose SecurityPolicy slot another policy holds (§5.3) go into one EnvoyExtensionPolicy (EEP) per namespace instead, same name and labels:
+
+```yaml
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata: { name: mm-<hash8(release-namespace)>, namespace: <app-ns>, labels: <as above> }
+spec:
+  targetRefs: [ ... ]                # the namespace's routes armed through the EEP, sorted
+  extProc:
+    - backendRefs: [ { name: maintenance-manager, namespace: <release-ns>, port: 9001 } ]
+      backendSettings:               # the SP's passive health check, plus:
+        circuitBreaker: { maxParallelRequests: 65536, maxPendingRequests: 65536 }   # §6.1
+      messageTimeout: 100ms
+      failOpen: true                 # load-bearing: false turns a missing grant or Service into 500s
+      processingMode:
+        request: { attributes: [xds.route_name] }   # request headers + route identity (§6.1)
+        response: {}                                 # response headers, for X-Maintenance-Manager
+        allowModeOverride: true                      # authz skips the response when it adds nothing
+    # No mergeType: EG 1.8 has none for EEPs, so a parent EEP is a conflict (§5.3).
+```
+
 - `hash8(x)` means the first 8 lowercase hex characters of `sha256(x)`.
 - **ReferenceGrant:** one per app namespace, written as `gateway.networking.k8s.io/v1beta1`, which every EG version reads. It lives in the release namespace:
   - name `mm-from-<ns>` (it always fits: namespace names are ≤ 63 characters, and object names may be up to 253);
-  - `from`: SecurityPolicy in `<ns>`;
+  - `from`: SecurityPolicy and EnvoyExtensionPolicy in `<ns>` (EG checks the backendRef against the policy's own kind);
   - `to`: Service `maintenance-manager`.
 
   It has to be one grant per namespace because `from` is capped at 16 entries.
-- **Order:** arm = grant, then SP. Disarm = remove targets, delete the SP when it has none left, then delete the grant. This order is only for clean status, not for safety: with `failOpen`, EG bypasses an invalid SP rather than returning 500.
+- **Order:** arm = grant, then SP and EEP. Disarm = remove targets, delete a policy when it has none left, then delete the grant once neither policy remains. Write failures are isolated per namespace and kind: a failed grant skips both policies, a failed SP does not stop the EEP, and a failed policy step keeps the grant. This order is only for clean status, not for safety: with `failOpen`, EG bypasses an invalid SP rather than returning 500.
 - **Drift:** every reconcile compares our SP and grant with the desired ones and writes only on a difference. **As built (M4):** the write is a full `Update` (create when absent), not server-side apply: SSA never removes fields owned by another field manager, so a `bodyToExtAuth` (or `cors`) someone added with `kubectl edit` would survive it. The comparison tolerates API-server defaults inside our structures and treats any other spec key as drift. A no-op reconcile writes nothing (envtest checks the resourceVersion).
-- **GC:** on startup and on every reconcile, delete our SPs and grants that are no longer needed. Ours means: an SP with **our name and our owner label value**, and any `mm-from-<ns>` grant in the release namespace (keyed by name, so a grant whose labels or spec were edited is repaired, not re-created forever).
+- **GC:** on startup and on every reconcile, delete our SPs, EEPs and grants that are no longer needed. Ours means: a policy with **our name and our owner label value**, and any `mm-from-<ns>` grant in the release namespace (keyed by name, so a grant whose labels or spec were edited is repaired, not re-created forever).
 - **One install per cluster.** The CRDs and ClusterRole are cluster-scoped, so a second release fails on Helm's ownership check. README and NOTES.txt say so. The owner label keeps GC from ever touching anything else.
 - **Uninstall:** a Helm pre-delete hook Job runs `maintenance-manager cleanup`. It:
   1. scales the Deployment to 0 and waits;
-  2. deletes our SPs;
+  2. deletes our SPs and EEPs;
   3. deletes our grants.
+
+  A downgrade to a version without the EEP fallback leaves our EEPs behind: `kubectl delete envoyextensionpolicy -A -l maintenance-manager.oss.life.li/owner=<release-namespace>` removes them.
 
 ### 5.2 Route identity in `Check()`
 
@@ -269,25 +292,32 @@ Reserved paths (`/__maintenance-manager/*`) are answered for whichever armed rou
 
 How EG combines SPs: on the same target, the **oldest SP wins** (the loser gets `Accepted=False, Reason=Conflicted`). A route-level SP replaces a parent SP unless `mergeType` is set. A rule-level SP (`sectionName`) overrides a route-level SP.
 
-A route is **in conflict**, and is removed from our SP's `targetRefs` (an RDS-only change, so no drain), if any SP that is **not ours** does either of these:
+A route's **SP slot is taken**, and the route is removed from our SP's `targetRefs` (an RDS-only change, so no drain) and moves to the EEP rung below, if any SP that is **not ours** does either of these:
 - **It targets the route.** Count `targetRefs` (with or without `sectionName`) and `targetSelectors`, including cross-namespace `targetSelectors.namespaces`, so scan SPs **cluster-wide**.
 - **It targets the route's parent Gateway, listener or ListenerSet and has its own `extAuth`.** Merging two extAuths would replace one of them, or make the config invalid, and with failOpen an invalid config silently removes the platform's auth.
 
 `targetSelectors` count with their namespace scope: `from: Same` (the default) is the SP's own namespace, `from: All` every namespace, and `from: Selector` is evaluated against namespace labels, as Envoy Gateway does. Treating `Selector` as "every namespace" would let any tenant disarm the whole cluster with a selector that matches nothing.
 
-Ownership is "our owner label **and** our name": an SP with our labels but another name is foreign (conflict check, never adopted, never deleted by cleanup); a lost `managed-by` label on ours is drift and gets repaired. A foreign SP squatting on our name in an app namespace blocks only that namespace (reported as a conflict); write errors, too, stay per namespace, so one tenant cannot stall arming elsewhere.
+Ownership is "our owner label **and** our name": an SP with our labels but another name is foreign (conflict check, never adopted, never deleted by cleanup); a lost `managed-by` label on ours is drift and gets repaired. A foreign SP squatting on our name in an app namespace takes the SP rung away for that namespace only (its routes move to the EEP rung; a squatter on the EEP name too makes them conflicts); write errors, too, stay per namespace, so one tenant cannot stall arming elsewhere.
 
 A foreign parent SP *without* `extAuth` (JWT, OIDC, basic auth, CORS, IP rules…) is **not** a conflict. `mergeType: StrategicMerge` keeps it working, and EG reports `Merged=True`.
 
-If a foreign SP appears on an already-armed route, that route is removed within one reconcile (~1 s). Until then, oldest-wins may briefly suppress the newcomer. Document this rather than hide it.
+If a foreign SP appears on an already-armed route, that route moves to our EEP within one reconcile (~1 s). Until then, oldest-wins may briefly suppress the newcomer. Document this rather than hide it.
 
 Removing a route from `targetRefs` is RDS-only **unless it was the namespace's last armed route**: then the SP is deleted, which drains the listener (§5.4), and re-arming creates it again (another drain). A quick window toggle does the same. NOTES.txt says so; the README gets it with M7.
+
+**As built: the EnvoyExtensionPolicy rung.** A route in conflict above is not given up: it is armed through our EEP (§5.1) instead, when that slot is free. EEPs follow the same rules as SPs (oldest wins on a target; a route-level EEP replaces a parent one, and EG 1.8 cannot merge them), so the EEP rung is unsafe, and the route a real conflict, if a foreign EEP (by name or selector, cluster-wide) targets the route or its parent Gateway, listener or ListenerSet, or a foreign EEP squats on our name in the namespace. The ladder per route is: SP if free, else EEP if free, else conflict with the reasons of both.
+- **Sticky:** a route our EEP targets stays on it while the EEP rung stays possible, even once its SP slot is free again: every move adds or removes a filter and drains the listener (§5.4). It leaves when the window disarms.
+- **Order of filters** (EG's default HTTP filter order, both versions; `EnvoyProxy.spec.filterOrder` can change it): ext_authz, API-key auth, basic auth, OAuth2, JWT and Lua run **before** ext_proc; RBAC (`authorization`), rate limits and Wasm run after it. On an EEP-armed route the platform's authentication answers first: anonymous users get its 401 or login, not our page, and the bypass header and status endpoint need authentication too. A platform IP rule (`authorization`) runs after us in both modes.
+- The editor shows such routes as armed "(extension policy)", with the reason; Conflicts holds only the routes neither policy can take.
 
 Conflicts show in red on the editor dashboard and on the service and window pages, computed live.
 
 ### 5.4 Listener drains (document in the README)
 
 EG adds one ext_authz HTTP filter **per SecurityPolicy** to the listener. The filter is disabled by default and enabled per route. So **creating or deleting an SP** changes the listener's filter chain, and Envoy drains it: existing connections on that listener close gracefully over 60 s. For plain HTTP that is the whole port; for HTTPS it is that SNI chain.
+
+The same holds for our EEP (one ext_proc filter per EEP): its create and delete drain, a `targetRefs` change does not. A namespace with routes on both policies has two filters, so up to two drains on arm and two on disarm; a route moving from the SP to the EEP creates the EEP (a drain) and, if it was the SP's last route, deletes the SP (another). The sticky ladder (§5.3) keeps moves to the ones a platform policy forces.
 
 Changing an SP's `targetRefs` is RDS-only and causes no drain. Measured (D5): a create drains for 60 s and connections end with a clean FIN. One SP per namespace keeps drains to two per namespace per maintenance event: the first arm and the last disarm. With the 15-min lead time, the arm-drain happens well before maintenance starts.
 
@@ -335,6 +365,16 @@ Implementation notes:
   - There is no redirect endpoint and no redirect parameter, so there is no open-redirect surface.
 - **Pass-through header:** `X-Maintenance-Manager: window=<name>; phase=<name>; action=<action>`, via `OkHttpResponse.response_headers_to_add`.
 - **Cookies** are found with a `strings.Index` scan. **Metrics** use pre-resolved counter handles with no per-host or per-route labels.
+
+### 6.1 ext_proc, for routes armed through the EnvoyExtensionPolicy
+
+The same server on port 9001 also serves `envoy.service.ext_proc.v3.ExternalProcessor`. Both protocols share one decision function (steps 3–9 above) and the precomputed answers; each answer exists in both shapes.
+- **Route identity:** the `xds.route_name` attribute. EG names an HTTPRoute's Envoy routes `httproute/<ns>/<name>/rule/<i>/match/<j>[/…]` (both versions); the first two segments are the key. The attributes arrive keyed by the filter's name, so every entry is searched.
+- **Headers:** ext_proc sends every request header (ext_authz only the four listed). Values arrive in `raw_value`; answers carry theirs in `raw_value` too, or Envoy drops them (Set-Cookie, Content-Type). Cookies split into several headers by HTTP/2 are joined. Reading and deciding allocates nothing except for a repeated header; the strings point into the request.
+- **Stream:** one per request. Request headers → an `ImmediateResponse` (page, problem+json, status) and the handler returns; or continue (removing the bypass header if present) with a `mode_override` that skips the response headers, and the handler returns; or, for a banner or interstitial pass, continue without the override, then answer the response headers with `X-Maintenance-Manager` and return. A request in a banner phase therefore holds a stream until the app's response headers arrive. EG builds one ext_proc cluster per EEP, and Envoy's default circuit breaker allows 1024 parallel requests on it: beyond that every request on the namespace's EEP routes fails open, block phases included. Our EEP raises the limit to 65536 (`backendSettings.circuitBreaker`). EG also sets the ext_proc gRPC service timeout to 10 s; if Envoy applies it to the stream, a banner response slower than that loses its header (fail-open, nothing else).
+- **Limits:** `maxRecvMsgSize` is 128 KiB. A larger request (Envoy's header limit is configurable) fails to read, Envoy fails open, and `check_total{result="error"}` counts it.
+- **The bypass token and platform auth:** on an EEP-armed route the platform's ext_authz runs before us. Envoy's ext_authz forwards every header unless told otherwise, so the platform's auth service sees `X-Maintenance-Manager-Bypass` before we strip it. Rotate the token if that service is not trusted with it (README, docs/security.md).
+- Repeated headers are joined as Envoy joins them for ext_authz (`,`, cookies `; `), so both protocols decide alike.
 
 **problem+json (block):**
 
@@ -521,14 +561,14 @@ resources:
 **RBAC:**
 - **Cluster-wide:**
   - `get/list/watch` on httproutes and gateways, plus listenersets in both `gateway.networking.k8s.io` and `gateway.networking.x-k8s.io` (xlistenersets)
-  - `get/list/watch/create` on securitypolicies, and `update/patch/delete` only on our name (`resourceNames: [mm-<hash8(release-ns)>]`, rendered with `sha256sum | trunc 8`): a compromised pod cannot rewrite or delete a platform's JWT/OIDC/extAuth policy
+  - `get/list/watch/create` on securitypolicies and envoyextensionpolicies, and `update/patch/delete` only on our name (`resourceNames: [mm-<hash8(release-ns)>]`, rendered with `sha256sum | trunc 8`): a compromised pod cannot rewrite or delete a platform's JWT/OIDC/extAuth policy
   - `get/list/watch` on namespaces (`targetSelectors.namespaces.from: Selector` is evaluated against namespace labels, §5.3)
   - no events: nothing records Kubernetes Events (conflicts are logged, counted in `maintenance_manager_controller_conflicts` and shown in the editor), so the rule was dropped in M7
 - **Release namespace:**
   - all verbs on our 3 CRDs
   - `get/list/watch/create/update/patch/delete` on referencegrants
   - `create` on leases, and `get/list/watch/update/patch` on the `maintenance-manager` Lease
-- **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
+- **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies and envoyextensionpolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
 
 On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabled.
 
@@ -561,8 +601,11 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 | K8s API down | snapshot keeps last state; authz keeps answering; editor writes fail visibly |
 | leader lost | another replica takes over (Lease); authz unaffected. A leader whose caches fail to sync 3 terms in a row gives the Lease up and stays out for one lease duration (15 s), so a healthy replica wins it |
 | invalid page | built-in default page served |
-| foreign SP appears on armed route | route removed from our SP within ~1 s; red in editor |
-| uninstall | pre-delete hook: scale to 0, delete SPs, delete grants |
+| foreign SP appears on armed route | route moves from our SP to our EEP within ~1 s; shown as "(extension policy)" in the editor; red only if a foreign EEP holds that slot too |
+| invalid EEP (e.g. a grant without the EnvoyExtensionPolicy kind) | EG skips the ext_proc filter for that route (failOpen); no 500 |
+| more than 65536 parallel requests on one namespace's EEP routes | Envoy's circuit breaker trips; those requests pass unchecked (fail-open). In practice authz memory is the lower limit: each in-flight banner request holds a goroutine and a stream (estimated 10–20 KiB, unmeasured) |
+| EEP CRD missing | the leader's caches never sync, so nothing is armed and the sync warning names envoyextensionpolicies; every EG ≥ 1.1 installs it |
+| uninstall | pre-delete hook: scale to 0, delete SPs and EEPs, delete grants |
 
 ---
 
@@ -604,7 +647,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 | kind create | ~1 min |
 | EG install + ready | ~1–2 min |
 | ko build + load + chart install | ~1–2 min |
-| E1–E11 | ~2–3 min |
+| E1–E12 | ~3–4 min |
 
 E10 waits for the drain, up to 60 s. All other tests share one cluster and run sequentially, with fresh namespaces per test.
 
@@ -618,15 +661,16 @@ Set `timeout-minutes: 15` on `e2e`. If a leg regularly runs over 10 min, fix the
 | E4 | the bypass header passes **and the echo backend never sees it** | M3 |
 | E5 | Deployment scaled to 0 → the route still serves the app (fail-open) | M2 |
 | E6 | a Gateway-level SP without `extAuth` (CORS) → ours is `Accepted` + `Merged`, and CORS still works | M4 |
-| E7 | a foreign route-level SP → the route is removed from our SP, and the foreign SP works | M4 |
+| E7 | a foreign route-level SP → the route moves from our SP to our EEP and stays blocked, and the foreign SP works | M4, EEP |
 | E8 | the warn → block phase transition happens by clock within 2 s of `startsAt` | M3 |
-| E9 | `helm uninstall` → zero SPs and zero ReferenceGrants left | M4 |
+| E9 | `helm uninstall` → zero SPs, EEPs and ReferenceGrants left | M4, EEP |
 | E10 | when our SP is created, an open WebSocket ends with a TCP FIN/EOF, not an RST, within the drain window. Close code 1006 is acceptable: Envoy closes drained upgrades without a close frame. Drain timing goes to the test log | M4 |
 | E11 | editor smoke over HTTP: create a Service, Page and Window via the forms; CSRF rejects a cross-site POST | M5 |
+| E12 | a route whose SP slot a platform policy holds (an allow-all IP `authorization`, as Qovery attaches) is armed through our EEP: banner header, status endpoint, interstitial page and cookie, 503 page and problem+json with `Retry-After`, bypass stripped; the platform policy stays Accepted; disabling removes our EEP | EEP |
 
 ### 13.3 Staging only (human; part of the handback script, §23)
 These depend on Qovery and can't run on kind:
-1. `kubectl get securitypolicy -A`: what does the platform attach? Does any parent SP use `extAuth`?
+1. `kubectl get securitypolicy -A` and `kubectl get envoyextensionpolicy -A`: what does the platform attach? Routes with a platform SP are armed through our EEP; a platform EEP on a Gateway or route makes them conflicts.
 2. `kubectl get crd referencegrants.gateway.networking.k8s.io -o jsonpath='{.spec.versions[*].name}'`: is `v1beta1` served?
 3. Does a platform-level 503 `responseOverride` replace our 503 page?
 4. Qovery redeploys don't delete our SPs or ReferenceGrants.
@@ -1181,10 +1225,10 @@ The last chat message is the issue link plus a one-line summary.
 
 ## 24. Definition of done (v1)
 - `vX.Y.Z` is released; image and chart are pullable anonymously, and attestations verify with the §23 command.
-- `e2e` is green on EG v1.8.3 and v1.9.1, covering E1–E11. `test` is green (race, bench gate, envtest, fuzz seeds, node).
+- `e2e` is green on EG v1.8.3 and v1.9.1, covering E1–E12. `test` is green (race, bench gate, envtest, fuzz seeds, node).
 - `lint` is green: zizmor at its default severity with zero findings, `test/workflows`, depage, licences, govulncheck.
 - The owner script's settings and both rulesets are verified via `gh api`.
-- Uninstall leaves zero SPs and grants (E9). `helm template --set editor.password=<12+ characters>` of the released chart renders without a cluster.
+- Uninstall leaves zero SPs, EEPs and grants (E9). `helm template --set editor.password=<12+ characters>` of the released chart renders without a cluster.
 - The run-report issue is complete.
 
 ## 25. Out of scope for v1

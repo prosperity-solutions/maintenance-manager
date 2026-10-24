@@ -18,8 +18,12 @@ func (r *Reconciler) apply(ctx context.Context, a Action, ex existingObjects) (w
 		return r.ensure(ctx, ex.grants[a.Namespace], DesiredGrant(r.Namespace, a.Namespace), false)
 	case EnsureSP:
 		return r.ensure(ctx, ex.policies[a.Namespace], DesiredSP(r.Namespace, a.Namespace, a.Targets), true)
+	case EnsureEEP:
+		return r.ensure(ctx, ex.extensions[a.Namespace], DesiredEEP(r.Namespace, a.Namespace, a.Targets), true)
 	case DeleteSP:
 		return r.remove(ctx, ex.policies[a.Namespace])
+	case DeleteEEP:
+		return r.remove(ctx, ex.extensions[a.Namespace])
 	case DeleteGrant:
 		return r.remove(ctx, ex.grants[a.Namespace])
 	}
@@ -28,8 +32,8 @@ func (r *Reconciler) apply(ctx context.Context, a Action, ex existingObjects) (w
 
 // ensure creates the object, or replaces its spec and owner labels when they
 // differ. A full Update (not server-side apply) is what removes fields other
-// managers added to our SecurityPolicy, such as bodyToExtAuth: SSA never
-// drops fields it does not own.
+// managers added to our policies, such as bodyToExtAuth: SSA never drops
+// fields it does not own.
 func (r *Reconciler) ensure(ctx context.Context, existing, desired *unstructured.Unstructured, strict bool) (bool, error) {
 	if existing == nil {
 		if err := r.Writer.Create(ctx, desired, client.FieldOwner(managedBy)); err != nil {

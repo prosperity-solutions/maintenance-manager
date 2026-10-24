@@ -49,7 +49,7 @@ func newServer(t *testing.T, objs ...client.Object) (*Server, client.Client) {
 		Namespace: ns, Password: password, Client: c, API: c, Lead: 15 * time.Minute,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return now },
 		View: func(context.Context) (controller.View, error) {
-			return controller.View{Conflicts: map[snapshot.RouteKey][]string{}, Accepted: map[string]controller.Acceptance{}}, nil
+			return controller.View{Conflicts: map[snapshot.RouteKey][]string{}, Accepted: map[controller.PolicyRef]controller.Acceptance{}}, nil
 		},
 	}, c
 }
@@ -460,13 +460,37 @@ func TestDashboardShowsStatesAndButtons(t *testing.T) {
 		key := snapshot.RouteKey{Namespace: "shop", Name: "web"}
 		return controller.View{Desired: controller.Desired{Routes: map[string][]string{"shop": {"web"}}},
 			Conflicts: map[snapshot.RouteKey][]string{key: {"SecurityPolicy x/y targets this route"}},
-			Accepted:  map[string]controller.Acceptance{"shop": {OK: true}},
-			Targets:   map[string]map[string]bool{"shop": {"web": true}}}, nil
+			Accepted:  map[controller.PolicyRef]controller.Acceptance{{Namespace: "shop", Kind: "SecurityPolicy"}: {OK: true}},
+			Targets:   map[string]map[string]string{"shop": {"web": "SecurityPolicy"}}}, nil
 	}
 	body := do(t, s.Handler(), http.MethodGet, "/", nil).Body.String()
 	for _, want := range []string{"state-active", "Start next phase now: down", "Disable now", "shop/web", "targets this route", `class="ok">yes`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "(extension policy)") {
+		t.Error("a SecurityPolicy-armed route is not marked as extension policy")
+	}
+
+	// Armed through the EnvoyExtensionPolicy: marked, with its acceptance
+	// (not the SecurityPolicy's) and why.
+	s.viewStale.Store(true) // the view is memoized for 2 s
+	s.View = func(context.Context) (controller.View, error) {
+		key := snapshot.RouteKey{Namespace: "shop", Name: "web"}
+		return controller.View{Desired: controller.Desired{ExtRoutes: map[string][]string{"shop": {"web"}}},
+			Conflicts: map[snapshot.RouteKey][]string{},
+			Via:       map[snapshot.RouteKey]string{key: "armed through an EnvoyExtensionPolicy (SecurityPolicy x/y targets this route)"},
+			Accepted: map[controller.PolicyRef]controller.Acceptance{
+				{Namespace: "shop", Kind: "SecurityPolicy"}:       {OK: true},
+				{Namespace: "shop", Kind: "EnvoyExtensionPolicy"}: {Reason: "Accepted=False reason=Conflicted"},
+			},
+			Targets: map[string]map[string]string{"shop": {"web": "EnvoyExtensionPolicy"}}}, nil
+	}
+	body = do(t, s.Handler(), http.MethodGet, "/", nil).Body.String()
+	for _, want := range []string{"(extension policy)", "armed through an EnvoyExtensionPolicy", "reason=Conflicted"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard (extension policy) lacks %q", want)
 		}
 	}
 }

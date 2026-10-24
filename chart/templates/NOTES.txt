@@ -3,7 +3,8 @@ Maintenance Manager for Envoy® {{ .Chart.AppVersion }} is installed in {{ .Rele
 Create a MaintenanceService (which routes), a MaintenancePage (what users see)
 and a MaintenanceWindow (when, and what happens) in {{ .Release.Namespace }}.
 Shortly before a window starts, maintenance-manager attaches a SecurityPolicy
-to the matching HTTPRoutes.
+to the matching HTTPRoutes (an EnvoyExtensionPolicy where another policy
+already holds a route's SecurityPolicy slot).
 Creating or deleting that policy drains the Envoy listener for 60 s: open
 connections (WebSockets too) close gracefully and reconnect.
 
@@ -24,5 +25,5 @@ apps as if it was not there (fail-open).
 One install per cluster: the CRDs and the ClusterRole are cluster-scoped, so a
 second release fails Helm's ownership check. Uninstalling keeps your windows,
 pages and services (the CRDs carry helm.sh/resource-policy: keep), and its
-pre-delete hook removes every SecurityPolicy and ReferenceGrant it created.
+pre-delete hook removes every policy and ReferenceGrant it created.
 If the hook fails, run helm uninstall again; --no-hooks leaves them behind.

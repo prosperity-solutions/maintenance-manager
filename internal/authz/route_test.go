@@ -73,7 +73,8 @@ func TestWantsHTML(t *testing.T) {
 		{"get", "text/html", false}, // methods are case-sensitive
 	}
 	for _, tc := range cases {
-		got := wantsHTML(request(tc.method, tc.accept, nil).GetAttributes().GetRequest().GetHttp())
+		h := request(tc.method, tc.accept, nil).GetAttributes().GetRequest().GetHttp()
+		got := wantsHTML(h.GetMethod(), h.GetHeaders()["accept"])
 		if got != tc.want {
 			t.Errorf("wantsHTML(%s, %q) = %v, want %v", tc.method, tc.accept, got, tc.want)
 		}
