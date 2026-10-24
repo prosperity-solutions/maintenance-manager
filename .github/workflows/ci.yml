@@ -209,6 +209,13 @@ jobs:
         env:
           MM_BENCH_GATE: "1"
         run: go test -count=1 -run '^TestCheckBudget$' -v ./internal/authz
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.0 # the current LTS, pinned
+          package-manager-cache: false # no packages: the client has none
+      - name: JS client (node --test)
+        # A glob, not the directory: Node 24 runs `node --test client/` as a file.
+        run: node --test 'client/*.test.mjs'
 
   e2e:
     name: e2e
@@ -488,7 +495,7 @@ jobs:
         env:
           VERSION: ${{ needs.publish.outputs.version }}
         run: |
-          if [ -f client/maintenance-manager.js ]; then cp client/maintenance-manager.js dist/; fi
+          cp client/maintenance-manager.js dist/ # the JS client, a release asset since M6
           (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
           GOROOT=$(go env GOROOT) scripts/dev/t go-licenses report ./... > dist/THIRD_PARTY_LICENSES.csv
       - name: Create, fill and publish the release

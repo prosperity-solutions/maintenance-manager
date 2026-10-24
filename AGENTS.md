@@ -63,7 +63,7 @@ lefthook runs it on `pre-push`; install once per clone with
 `scripts/dev/t lefthook install`:
 
 ```sh
-gofmt -l . && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && { [ ! -d client ] || node --test client/; }
+gofmt -l . && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs'
 ```
 
 ## Conventions
