@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -110,7 +110,7 @@ func serve(args []string, log *slog.Logger) int {
 		GracefulShutdownTimeout: ptrTo(25 * time.Second),
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "HTTPRoute") {
+		if meta.IsNoMatchError(err) {
 			log.Error("serve: the cluster does not serve gateway.networking.k8s.io/v1 HTTPRoute. maintenance-manager needs Envoy Gateway >= 1.8, which installs the Gateway API; install it first", "err", err)
 			return 1
 		}

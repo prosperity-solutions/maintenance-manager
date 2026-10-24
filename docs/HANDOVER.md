@@ -111,7 +111,7 @@ All three are **namespaced**, live in the chart's release namespace, and are ser
 
 - Go types use kubebuilder markers.
 - `controller-gen` generates the CRDs into `chart/templates/crds/` with `+kubebuilder:metadata:annotations="helm.sh/resource-policy=keep"` and `+kubebuilder:metadata:labels="app.kubernetes.io/part-of=maintenance-manager"`. Upgrades apply schema changes, and uninstall never deletes user data.
-- **Schema markers do structural limits only:** `MaxLength`/`MaxItems`/`MaxProperties` cap `html` at 65536 chars, 32 locales, 16 phases, 32 routings per phase and 64 services per routing. One CEL rule rejects an empty `routeSelector`.
+- **Schema markers do structural limits only:** `MaxLength`/`MaxItems`/`MaxProperties` cap `html` at 65536 chars, 32 locales, 16 phases, 32 routings per phase and 64 services per routing; since M3 also a page title at 256 chars, a message at 4096 and a phase name at 63 (the name must also be a DNS label, checked in Go: it goes into the `X-Maintenance-Manager` header). One CEL rule rejects an empty `routeSelector`.
 - Everything else is validated in Go, by both the editor and the snapshot builder.
 
 ### 4.1 `MaintenanceService` — "which routes"
@@ -320,7 +320,7 @@ Implementation notes:
   - block HTML and block problem+json per (page, locale, window, phase)
 
   `Check()` returns a shared pointer, so serving a decision allocates nothing. (gRPC only reads the message, so sharing is safe.) Bodies are Go `string`s (the proto field type). `.Until` varies per window and phase, which is why the variants are keyed that way. `banner` has no body.
-- **`Retry-After`** is precomputed as an HTTP-date: the end of the *contiguous* run of block phases, omitted if unknown. That includes a run whose last phase is followed by a pending phase: it ends whenever someone presses "Start next phase now", so neither `Retry-After` nor `.Until`/`until` promise `endsAt`. Nothing is computed per request except the interstitial cookie comparison.
+- **`Retry-After`** is precomputed as an HTTP-date: the end of the *contiguous* run of block phases, omitted if unknown. In a run of several block phases, `Retry-After` is the end of the whole run while `.Until` and problem+json `until` are the end of the current phase: the header says when to come back, the text says what happens next. It also covers a run whose last phase is followed by a pending phase: it ends whenever someone presses "Start next phase now", so neither `Retry-After` nor `.Until`/`until` promise `endsAt`. Nothing is computed per request except the interstitial cookie comparison.
 - **Expected allocations:** decoding the request (unavoidable, outside the budget) plus ≤ 2 in our code. If the benchmark shows more, fix the code, not the gate.
 - **Interstitial cookie:** `mm_seen_<hash8(window.UID)>=<phaseKey>; Path=/; HttpOnly; SameSite=Lax`.
   - It is a **session cookie**: no `Max-Age`, no `Secure`. Behind a TLS-terminating load balancer Envoy often sees `http`, and a `Secure` cookie would then make the interstitial loop forever.
@@ -343,7 +343,7 @@ There is exactly one: `GET /__maintenance-manager/status?locale=de-CH`.
 
 - **Response:** 200 JSON `{action, window, phase, title, message, until, locale}`, with headers `X-Maintenance-Manager: 1` and `Cache-Control: no-store`. `action` is `"none"` if nothing is active for this route or a valid bypass header is present.
 - **It exists only while the route is armed.** Otherwise the request reaches the app, usually as a 404. The JS client treats any response **without** an `X-Maintenance-Manager` header as "nothing active". Apps may answer this path themselves with a cheap 204 (optional, documented).
-- **Bypass for your team:** the request header `X-Maintenance-Manager-Bypass: <token>`, set with a browser header extension.
+- **Bypass for your team:** the request header `X-Maintenance-Manager-Bypass: <token>`, set with a browser header extension. The token is empty (bypass off) or at least 16 characters (the chart schema and `serve` refuse shorter ones: the status endpoint would make a short token guessable). Changing it takes a `kubectl rollout restart` (the pod reads it at start).
   - Compared in constant time.
   - Stripped before the app **on armed routes**. At rest Envoy never calls us, so the header passes through untouched. Send it only during maintenance (README says so).
   - There is no bypass endpoint and no bypass cookie, so the token never lands in URLs, logs or app backends.
@@ -1133,7 +1133,7 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 |---|---|---|
 | D1 | Exact harden-runner allow-list for `publish`/`release`/`verify` | Start in block mode with §17.2's list and fix the misses from the job log via a `fix(release):` PR. A `publish`/`release` miss means the version isn't published yet, so the next releasable merge retries it. A `verify` miss after publish is proven by the next release. M1's exit is "first release published, `verify` green". **First release (M1):** no allow-list miss, but two transient failures: GHCR answered `DENIED` to one of ko's parallel SBOM pushes while it created the package, and on the re-run harden-runner refused the first connection to the allow-listed `proxy.golang.org` ("connection refused", seconds after it started). Fix: release jobs prefetch modules and tools with retries (`scripts/ci/prefetch.sh`), and `ko build` gets one retry (same digests). **`verify` miss (v0.1.0):** `gh attestation verify` fetches the attestation bundle from `tmaproduction.blob.core.windows.net`, which was blocked; added to `verify`'s list. The attestations themselves verified fine outside CI. |
 | D2 | Whether new GHCR packages start private or public | Check after M1 (`crane manifest` anonymously); adjust §21.4's wording. **Settled (M1):** public — anonymous manifest GETs for both packages returned 200 right after `v0.1.0`. §21.4 rewritten |
-| D3 | Whether the workflow-execution event rule affects Dependabot runs | Watch the first Dependabot PR's run; if blocked, document the impact and the owner's options |
+| D3 | Whether the workflow-execution event rule affects Dependabot runs | Watch the first Dependabot PR's run; if blocked, document the impact and the owner's options. **Settled (M3):** not affected. Dependabot's first PRs (#7, #8, `tools/` bumps) ran the full CI as `pull_request` events, e2e included, and the `ship` gate exempted them by author |
 | D4 | (PAT only) Whether the PAT can read `security_and_analysis` | Try it in §21.3 verification; if not, rely on the script summary (already allowed) |
 | D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README |
 | D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does |

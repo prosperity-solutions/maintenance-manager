@@ -259,6 +259,7 @@ func TestCookieValue(t *testing.T) {
 		{"xmm_seen_x=abc", ""},
 		{"xmm_seen_x=no; mm_seen_x=yes", "yes"},
 		{"a=1,mm_seen_x=abc", "abc"},
+		{"mm_seen_x=abc,b=2", "abc"},
 		{"", ""},
 	}
 	for _, tc := range cases {
@@ -288,6 +289,7 @@ func hotRequests() map[string]*authv3.CheckRequest {
 		"block json":   req{headers: map[string]string{"accept": "application/json"}}.build(),
 		"status":       req{path: statusPath + "?locale=de"}.build(),
 		"bypass":       req{headers: map[string]string{bypassHeader: testToken}}.build(),
+		"long token":   req{headers: map[string]string{bypassHeader: strings.Repeat("f", 64)}}.build(),
 		"other route":  req{route: "a/b"}.build(),
 		"cookie+block": req{headers: map[string]string{"accept": browser, "cookie": "a=1; b=2; c=3"}}.build(),
 	}
@@ -399,5 +401,17 @@ func TestRenderFallback(t *testing.T) {
 	}
 	if body := de.GetDeniedResponse().GetBody(); strings.Contains(body, "custom") || !strings.Contains(body, "Gleich zurück") {
 		t.Fatalf("de: want the built-in page with the German title, got %q", body)
+	}
+}
+
+func TestConstantTimeEqual(t *testing.T) {
+	long := strings.Repeat("ab", 40)
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{{"", "", true}, {"x", "x", true}, {long, long, true}, {"x", "y", false}, {"x", "xy", false}, {long, long[:79] + "c", false}} {
+		if got := constantTimeEqual(tc.a, tc.b); got != tc.want {
+			t.Errorf("constantTimeEqual(%q, %q) = %v", tc.a, tc.b, got)
+		}
 	}
 }

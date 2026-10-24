@@ -90,8 +90,7 @@ func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.Che
 	path, query, _ := strings.Cut(http.GetPath(), "?")
 
 	token, hasBypassHdr := headers[bypassHeader]
-	bypass := hasBypassHdr && tbl.bypass != "" &&
-		subtle.ConstantTimeCompare([]byte(token), []byte(tbl.bypass)) == 1
+	bypass := hasBypassHdr && tbl.bypass != "" && constantTimeEqual(token, tbl.bypass)
 	ok := okResponse
 	if hasBypassHdr {
 		ok = okStripResponse
@@ -192,6 +191,20 @@ func queryParam(query, name string) string {
 	return ""
 }
 
+// constantTimeEqual compares two strings in time independent of their
+// content, without converting them to []byte (which allocates for long
+// tokens). Only the length can leak, as with crypto/subtle.
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := 0; i < len(a); i++ {
+		v |= a[i] ^ b[i]
+	}
+	return subtle.ConstantTimeByteEq(v, 0) == 1
+}
+
 // cookieValue finds "name=" in a Cookie header at a cookie boundary and
 // returns its value, without allocating.
 func cookieValue(header, prefix string) string {
@@ -203,7 +216,7 @@ func cookieValue(header, prefix string) string {
 		// ",": Envoy joins repeated Cookie headers with a comma.
 		if i == 0 || header[i-1] == ' ' || header[i-1] == ';' || header[i-1] == ',' {
 			v := header[i+len(prefix):]
-			if j := strings.IndexByte(v, ';'); j >= 0 {
+			if j := strings.IndexAny(v, ";,"); j >= 0 {
 				v = v[:j]
 			}
 			return strings.TrimSpace(v)

@@ -58,8 +58,9 @@ type Builder struct {
 	Now        func() time.Time
 	OnSnapshot func(*Snapshot)
 
-	kick chan struct{}
-	once sync.Once
+	kick    chan struct{}
+	once    sync.Once
+	covered int // routes covered by the last snapshot, for quieter logs
 }
 
 // NeedLeaderElection reports false: every replica builds its own snapshot.
@@ -209,7 +210,14 @@ func (b *Builder) rebuild(ctx context.Context) (time.Time, error) {
 	t0 := time.Now()
 	snap := Build(in)
 	b.OnSnapshot(snap)
-	b.Log.Info("snapshot built", "windows", len(windows.Items), "routes", len(routes.Items), "covered", len(snap.Routes), "took", time.Since(t0).String())
+	// Any HTTPRoute change in the cluster rebuilds; say so at Info only when
+	// the set of covered routes changes size.
+	level := slog.LevelDebug
+	if len(snap.Routes) != b.covered {
+		level = slog.LevelInfo
+		b.covered = len(snap.Routes)
+	}
+	b.Log.Log(ctx, level, "snapshot built", "windows", len(windows.Items), "routes", len(routes.Items), "covered", len(snap.Routes), "took", time.Since(t0).String())
 
 	var next time.Time
 	for i := range windows.Items {
