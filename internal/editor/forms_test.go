@@ -298,7 +298,7 @@ func TestWindowRowOrderingAndBlanks(t *testing.T) {
 		"p10.r10.services": {"late"}, "p10.r9.services": {"early1", "early2"}, "p10.r9.page": {"pg"},
 		"p2.order": {"2"}, "p2.name": {"second"}, "p2.action": {"block"}, "p2.r0.services": {"x"},
 		// Blank rows: nothing but defaults.
-		"p3.order": {"3"}, "p3.action": {"banner"}, "p3.r0.page": {"only-a-page"},
+		"p3.order": {"3"}, "p3.action": {"banner"}, "p3.r0.page": {""},
 		"p4.order": {"4"}, "p4.name": {""}, "p4.r0.services": {""},
 		// Unknown fields and malformed indices are ignored.
 		"p+1.name": {"x"}, "p-1.name": {"x"}, "pX.name": {"x"}, "p.name": {"x"}, "p1name": {"x"}, "q1.name": {"x"},

@@ -26,9 +26,9 @@
 {{if .Routes}}
 <table><tr><th>Route</th><th>Armed</th><th>Envoy Accepted</th><th>Conflicts</th></tr>
 {{range .Routes}}<tr><td>{{.Namespace}}/{{.Name}}</td>
-<td>{{if eq .Armed "yes"}}<span class="ok">yes</span>{{else if eq .Armed "pending"}}<span class="warn">pending</span> <span class="muted">the controller has not attached it yet</span>{{else}}<span class="muted">no</span>{{end}}</td>
+<td>{{if eq .Armed "yes"}}<span class="ok">yes</span>{{else if eq .Armed "unknown"}}<span class="warn">unknown</span>{{else if eq .Armed "pending"}}<span class="warn">pending</span> <span class="muted">the controller has not attached it yet</span>{{else}}<span class="muted">no</span>{{end}}</td>
 <td>{{if eq .Accepted "yes"}}<span class="ok">yes</span>{{else if eq .Accepted "no"}}<span class="err">no</span> <span class="muted">{{.AcceptedWhy}}</span>{{else}}<span class="muted">–</span>{{end}}</td>
-<td>{{range .Conflicts}}<div class="err">{{.}}</div>{{end}}</td></tr>{{end}}
+<td>{{if eq .Armed "unknown"}}<span class="warn">unknown</span>{{end}}{{range .Conflicts}}<div class="err">{{.}}</div>{{end}}</td></tr>{{end}}
 </table>
 {{else if or (eq .State "armed") (eq .State "active")}}<p class="muted">No routes match this window's services.</p>{{end}}
 </div>

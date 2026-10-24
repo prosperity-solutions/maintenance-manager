@@ -17,7 +17,8 @@ import (
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
-// Limits of the CRD schema (§4), checked here in runes.
+// Limits of the CRD schema (§4), checked here in runes; maxSelectors is the
+// editor's own (the CRD caps matchLabels only by being non-empty).
 const (
 	maxHTML        = 65536
 	maxTitle       = 256
@@ -327,7 +328,7 @@ type routingRow struct {
 type phaseRow struct {
 	order, name, startsAt, startsAtWas, action string
 	routings                                   map[int]*routingRow
-	hasServices                                bool
+	hasServices, hasPage                       bool
 }
 
 // DecodeWindow reads a window form, interpreting times in loc. Phases are
@@ -391,6 +392,7 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 				ph.hasServices = ph.hasServices || len(svcs) > 0
 			case "page":
 				rowAt(ph.routings, j).page = first(vals)
+				ph.hasPage = ph.hasPage || first(vals) != ""
 			}
 		}
 	}
@@ -404,8 +406,8 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 	var kept []keptPhase
 	for _, i := range sortedRows(&p, rows, "phases", maxPhases) {
 		r := rows[i]
-		if r.name == "" && !r.hasServices && r.startsAt == "" {
-			continue
+		if r.name == "" && !r.hasServices && r.startsAt == "" && !r.hasPage {
+			continue // the order is prefilled on blank rows, so it does not count
 		}
 		k := keptPhase{row: r, idx: i}
 		if n, ok := parseOrder(r.order); ok {
@@ -432,7 +434,7 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 			p.add(f+".order", "the order must be a whole number")
 		}
 		if r.name == "" && !r.hasServices {
-			p.add(f+".name", "row has a start time but no name")
+			p.add(f+".name", "row has a start time or page but no name")
 		}
 		p.text(f+".name", r.name, maxPhaseName)
 		switch a := mmv1.Action(r.action); a {
@@ -450,7 +452,10 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 		for _, j := range sortedRows(&p, r.routings, f+".r0.services", maxRoutings) {
 			rr := r.routings[j]
 			if len(rr.services) == 0 {
-				continue // a page alone does not make a routing
+				if rr.page != "" {
+					p.add(f+".r"+strconv.Itoa(n)+".services", "a routing with a page needs at least one service")
+				}
+				continue
 			}
 			rf := f + ".r" + strconv.Itoa(n) + "."
 			n++

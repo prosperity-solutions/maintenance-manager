@@ -146,7 +146,7 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		in.GatewayLabels[types.NamespacedName{Namespace: g.Namespace, Name: g.Name}] = g.Labels
 	}
 	for _, kind := range r.ListenerSets {
-		// A fresh list per read: the editor calls View from concurrent requests.
+		// A fresh list per read, so View is safe for concurrent use.
 		l := &unstructured.UnstructuredList{}
 		l.SetGroupVersionKind(kind.GroupVersionKind())
 		if err := r.Leader.List(ctx, l); err != nil {

@@ -121,6 +121,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			for _, rt := range snapshot.WindowRoutes(&mw.Spec, selectors, infos) {
 				dr := dashRoute{Namespace: rt.Key.Namespace, Name: rt.Key.Name, Armed: "no", Conflicts: view.Conflicts[rt.Key]}
 				switch {
+				case verr != nil:
+					dr.Armed = "unknown"
 				case view.Targets[rt.Key.Namespace][rt.Key.Name]:
 					dr.Armed = "yes"
 				case desired[rt.Key]:

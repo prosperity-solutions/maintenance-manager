@@ -100,11 +100,12 @@ func decodeWindowForm(r *http.Request) (submitted, error) {
 
 // submitted is a decoded window form plus what is needed to show it again.
 type submitted struct {
-	spec     mmv1.MaintenanceWindowSpec
-	loc      *time.Location
-	problems []snapshot.Problem
-	raw      url.Values // the submission, to put back times that did not decode
-	from     []int      // per decoded phase, its submitted row
+	zoneChange bool // shown again in the browser's zone (see zoneMismatch)
+	spec       mmv1.MaintenanceWindowSpec
+	loc        *time.Location
+	problems   []snapshot.Problem
+	raw        url.Values // the submission, to put back times that did not decode
+	from       []int      // per decoded phase, its submitted row
 }
 
 // zoneMismatch: a browser that never told us its zone (no cookie) got the
@@ -116,10 +117,39 @@ func zoneMismatch(r *http.Request, formLoc *time.Location) *time.Location {
 		return nil
 	}
 	loc, err := LoadZone(r.PostFormValue("tz"))
-	if err != nil || loc.String() == formLoc.String() {
+	if err != nil || sameOffsets(loc, formLoc) {
 		return nil
 	}
 	return loc
+}
+
+// sameOffsets: two zones that agree over the next year (UTC and Etc/UTC,
+// say) are the same for a form.
+func sameOffsets(a, b *time.Location) bool {
+	t := time.Now()
+	for i := range 53 {
+		at := t.Add(time.Duration(i) * 7 * 24 * time.Hour)
+		_, oa := at.In(a).Zone()
+		_, ob := at.In(b).Zone()
+		if oa != ob {
+			return false
+		}
+	}
+	return true
+}
+
+// typedChange: the submitted time differs from the stored one shown in loc,
+// so the operator typed it.
+func typedChange(value, was string, loc *time.Location) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	stored, err := time.Parse(time.RFC3339, strings.TrimSpace(was))
+	if err != nil {
+		return true
+	}
+	wall, err := wallClock(value)
+	return err != nil || wall.Format(localLayout) != FormatLocal(stored, loc)
 }
 
 func zoneNotice(browser, form *time.Location) string {
@@ -127,7 +157,7 @@ func zoneNotice(browser, form *time.Location) string {
 		". The times are now shown in " + browser.String() + ": check the ones you typed, then save again."
 }
 
-// reopenProblem: saving an ended, enabled window so that it no longer ends
+// reopenProblem: saving an ended window as enabled so that it no longer ends
 // makes its last phase (usually block) active at once. Ask for a tick first.
 func reopenProblem(r *http.Request, old, updated *mmv1.MaintenanceWindowSpec, now time.Time) []snapshot.Problem {
 	if old == nil || !snapshot.Ended(old, now) || !updated.Enabled || snapshot.Ended(updated, now) || r.PostFormValue("reopen") == "on" {
@@ -151,6 +181,7 @@ func (s *Server) createWindow(w http.ResponseWriter, r *http.Request) {
 	// First, before any time-based check: typed times meant the browser's zone.
 	if browser := zoneMismatch(r, sub.loc); browser != nil {
 		rememberTZ(w, r)
+		sub.zoneChange = true
 		s.windowPage(w, r, http.StatusUnprocessableEntity, browser, name, "", true, &spec, ps, zoneNotice(browser, sub.loc), &sub)
 		return
 	}
@@ -186,6 +217,7 @@ func (s *Server) updateWindow(w http.ResponseWriter, r *http.Request) {
 	// First, before any time-based check: typed times meant the browser's zone.
 	if browser := zoneMismatch(r, sub.loc); browser != nil {
 		rememberTZ(w, r)
+		sub.zoneChange = true
 		s.windowPage(w, r, http.StatusUnprocessableEntity, browser, obj.Name, rv, false, &spec, ps, zoneNotice(browser, sub.loc), &sub)
 		return
 	}
@@ -288,13 +320,27 @@ func (s *Server) windowPage(w http.ResponseWriter, r *http.Request, status int, 
 	if sub != nil {
 		// A time that did not decode is nil in spec: put back what was typed,
 		// so fixing another error and saving cannot silently clear it.
-		if len(f.Errors["endsAt"]) > 0 {
+		// On a zone change, a typed time goes back as typed with no stored
+		// instant, so the next save reads it in the browser's zone (shown
+		// converted, it would be saved off by the offset); untouched times
+		// are shown converted and keep their instant.
+		if len(f.Errors["endsAt"]) > 0 || (sub.zoneChange && typedChange(sub.raw.Get("endsAt"), sub.raw.Get("endsAtWas"), sub.loc)) {
 			f.EndsAt, f.EndsAtWas = sub.raw.Get("endsAt"), sub.raw.Get("endsAtWas")
+			if sub.zoneChange {
+				f.EndsAtWas = ""
+			}
 		}
 		for i := range f.Phases {
-			if i < len(sub.from) && len(f.Errors["p"+itoa(i)+".startsAt"]) > 0 {
-				row := "p" + itoa(sub.from[i]) + "."
-				f.Phases[i].StartsAt, f.Phases[i].StartsAtWas = sub.raw.Get(row+"startsAt"), sub.raw.Get(row+"startsAtWas")
+			if i >= len(sub.from) {
+				break
+			}
+			row := "p" + itoa(sub.from[i]) + "."
+			val, was := sub.raw.Get(row+"startsAt"), sub.raw.Get(row+"startsAtWas")
+			if len(f.Errors["p"+itoa(i)+".startsAt"]) > 0 || (sub.zoneChange && typedChange(val, was, sub.loc)) {
+				f.Phases[i].StartsAt, f.Phases[i].StartsAtWas = val, was
+				if sub.zoneChange {
+					f.Phases[i].StartsAtWas = ""
+				}
 			}
 		}
 	}

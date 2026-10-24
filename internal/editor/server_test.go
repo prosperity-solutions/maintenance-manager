@@ -572,7 +572,7 @@ func TestZoneMismatchIsNotSaved(t *testing.T) {
 		"p0.order": {"1"}, "p0.name": {"down"}, "p0.startsAt": {"2026-11-02T18:00"}, "p0.action": {"block"}, "p0.r0.services": {"x"}}
 	w := do(t, h, http.MethodPost, "/windows/-/new", form)
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Nothing is saved yet") ||
-		!strings.Contains(w.Body.String(), `value="2026-11-02T19:00:00"`) || !strings.Contains(w.Header().Get("Set-Cookie"), "mm_tz=Europe/Berlin") {
+		!strings.Contains(w.Body.String(), `value="2026-11-02T18:00"`) || !strings.Contains(w.Header().Get("Set-Cookie"), "mm_tz=Europe/Berlin") {
 		t.Fatalf("a browser in another zone must see the form again in its zone: %d %s", w.Code, w.Header().Get("Set-Cookie"))
 	}
 	var list mmv1.MaintenanceWindowList
@@ -755,4 +755,49 @@ func jsonFields(t reflect.Type, prefix string) []string {
 		out = append(out, jsonFields(f.Type, p)...)
 	}
 	return out
+}
+
+func TestZoneChangeKeepsTypedTimesForTheNextSave(t *testing.T) {
+	s, c := newServer(t)
+	h := s.Handler()
+	form := url.Values{"name": {"w"}, "formTz": {"UTC"}, "tz": {"Europe/Berlin"},
+		"p0.order": {"1"}, "p0.name": {"down"}, "p0.startsAt": {"2026-11-02T18:00"}, "p0.action": {"block"}, "p0.r0.services": {"x"}}
+	w := do(t, h, http.MethodPost, "/windows/-/new", form)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `value="2026-11-02T18:00"`) {
+		t.Fatalf("a typed time must come back as typed: %d", w.Code)
+	}
+	// Save the shown form again, unchanged, now with the cookie.
+	again := browserSubmit(t, w.Body.String(), "/windows/-/new")
+	withCookie := func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: tzCookie, Value: "Europe/Berlin", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	}
+	if w := do(t, h, http.MethodPost, "/windows/-/new", again, withCookie); w.Code != http.StatusSeeOther {
+		t.Fatalf("second save: %d %s", w.Code, w.Body)
+	}
+	var got mmv1.MaintenanceWindow
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "w"}, &got)
+	if !got.Spec.Phases[0].StartsAt.Time.Equal(time.Date(2026, 11, 2, 17, 0, 0, 0, time.UTC)) {
+		t.Fatalf("18:00 typed in Berlin is 17:00 UTC, got %v", got.Spec.Phases[0].StartsAt)
+	}
+}
+
+func TestUTCAliasesAreNoZoneChange(t *testing.T) {
+	s, _ := newServer(t)
+	form := url.Values{"name": {"w"}, "formTz": {"UTC"}, "tz": {"Etc/UTC"},
+		"p0.order": {"1"}, "p0.name": {"down"}, "p0.action": {"block"}, "p0.r0.services": {"x"}}
+	if w := do(t, s.Handler(), http.MethodPost, "/windows/-/new", form); w.Code != http.StatusSeeOther {
+		t.Fatalf("Etc/UTC and UTC are the same zone: %d", w.Code)
+	}
+}
+
+func TestPageOnlyRoutingIsAProblem(t *testing.T) {
+	_, ps := DecodeWindow(url.Values{"p0.order": {"1"}, "p0.name": {"down"}, "p0.action": {"block"},
+		"p0.r0.services": {"x"}, "p0.r1.page": {"p"}}, time.UTC)
+	if len(ps) != 1 || ps[0].Field != "p0.r1.services" {
+		t.Fatalf("a routing with a page but no services must be reported: %v", ps)
+	}
+	_, ps = DecodeWindow(url.Values{"p0.order": {"1"}, "p0.r0.page": {"p"}, "p1.order": {"2"}}, time.UTC)
+	if len(ps) == 0 {
+		t.Fatal("a phase row with only a page must be reported, not dropped")
+	}
 }

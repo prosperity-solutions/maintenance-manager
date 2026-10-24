@@ -148,8 +148,10 @@ func TestE11Editor(t *testing.T) {
 
 	// Delete through the forms: the page and service are refused while the
 	// window uses them.
-	if r := editor(http.MethodPost, "/services/e11-svc/delete", url.Values{}, nil); r.status != http.StatusConflict {
-		t.Fatalf("deleting a used service: want 409, got %v", r)
+	for _, p := range []string{"/services/e11-svc/delete", "/pages/e11-page/delete"} {
+		if r := editor(http.MethodPost, p, url.Values{}, nil); r.status != http.StatusConflict {
+			t.Fatalf("deleting a used page or service (%s): want 409, got %v", p, r)
+		}
 	}
 	for _, del := range []struct {
 		path string

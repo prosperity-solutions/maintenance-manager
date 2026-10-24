@@ -15,9 +15,11 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -56,8 +58,10 @@ func scriptHash() string {
 }
 
 // Server is the editor (§10): server-rendered forms on port 8080, behind
-// HTTP basic auth. Every replica serves it; it reads through the API (not the
-// leader's caches), so any replica a port-forward reaches shows the same.
+// HTTP basic auth. Every replica serves it. Our CRs and routes come from the
+// replica's shared cache; edit forms, the dashboard's windows and the
+// controller's cluster-wide reads go to the API uncached (never the leader's
+// caches), so any replica a port-forward reaches shows the same.
 type Server struct {
 	Addr      string
 	Namespace string // release namespace: our CRs live here
@@ -88,8 +92,8 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
-	if len(s.Password) < MinPassword {
-		s.Log.Error("editor off: its password is shorter than 12 characters (check editor.existingSecret); whoever holds it can serve any HTML on every gated app's origin. authz keeps serving")
+	if utf8.RuneCountInString(s.Password) < MinPassword {
+		s.Log.Error("editor off: its password is shorter than " + strconv.Itoa(MinPassword) + " characters (check editor.existingSecret); whoever holds it can serve any HTML on every gated app's origin. authz keeps serving")
 		<-ctx.Done()
 		return nil
 	}
@@ -201,7 +205,7 @@ func (s *Server) auth(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		s.Log.Warn("editor login failed", "client", r.RemoteAddr)
+		s.Log.Warn("editor login failed", "client", clientAddr(r))
 		w.Header().Set("WWW-Authenticate", `Basic realm="maintenance-manager", charset="UTF-8"`)
 		http.Error(w, "login required (user admin)", http.StatusUnauthorized)
 	})
@@ -382,7 +386,7 @@ func (s *Server) audit(r *http.Request, verb, kind, name string, before, after a
 	s.viewMu.Lock()
 	s.viewAt = time.Time{} // the next page shows the effect of this write
 	s.viewMu.Unlock()
-	s.Log.Info("editor write", "verb", verb, "kind", kind, "name", name, "fields", changedFields(before, after), "client", r.RemoteAddr)
+	s.Log.Info("editor write", "verb", verb, "kind", kind, "name", name, "fields", changedFields(before, after), "client", clientAddr(r))
 }
 
 // changedFields lists the JSON paths that differ between two specs.
