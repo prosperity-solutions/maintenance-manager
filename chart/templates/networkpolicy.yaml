@@ -1,0 +1,57 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress to the maintenance-manager pods (docs/HANDOVER.md §11, M7): authz
+# (9001) only from Envoy Gateway's proxy pods in the listed namespaces, the
+# editor (8080) and metrics (8081) only from the namespaces listed. On most
+# CNIs traffic from the pod's own node is always allowed (kubelet probes; also
+# hostNetwork pods there), and kubectl port-forward does not pass through
+# NetworkPolicies. Egress is not restricted (the API server).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mm.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mm.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 9001
+          protocol: TCP
+      from:
+        {{- range .Values.networkPolicy.envoyNamespaces }}
+        # Envoy Gateway's proxy pods only (not its controller, not other pods).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: proxy
+              app.kubernetes.io/managed-by: envoy-gateway
+        {{- end }}
+    {{- with .Values.networkPolicy.editorFrom }}
+    - ports:
+        - port: 8080
+          protocol: TCP
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.metricsFrom }}
+    - ports:
+        - port: 8081
+          protocol: TCP
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}

@@ -86,3 +86,17 @@ func TestReadinessStaysDownAfterShutdown(t *testing.T) {
 		t.Fatalf("during shutdown: %d, want 503", rec.Code)
 	}
 }
+
+func TestPprofAddrLoopbackOnly(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "mm")
+	for _, ok := range []string{"127.0.0.1:6060", "localhost:6060", "[::1]:6060"} {
+		if _, err := parseServe([]string{"--pprof-addr=" + ok}); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{":6060", "0.0.0.0:6060", "10.0.0.1:6060", "6060"} {
+		if _, err := parseServe([]string{"--pprof-addr=" + bad}); err == nil {
+			t.Errorf("%s must be refused: only loopback", bad)
+		}
+	}
+}

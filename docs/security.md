@@ -32,13 +32,15 @@ produce an attestation that passes this.
   a `kubectl port-forward` (127.0.0.1). Behind an HTTPRoute every request
   comes from Envoy's address, so a public URL needs its own login in front
   (OIDC, an IP allowlist).
-- **Lock it down further** with a NetworkPolicy that denies ingress to port
-  8080 (port-forward does not pass through NetworkPolicies). If the editor is
+- **Lock it down further** with `networkPolicy.enabled=true` (port-forward
+  does not pass through NetworkPolicies). If the editor is
   unreachable, `kubectl patch mmw <window> --type=merge -p '{"spec":{"enabled":false}}'`
   stops a window.
-- **ClusterIP only:** any pod in the cluster can reach port 8080, so the
-  password is the only gate. Reach it with `kubectl port-forward`, or an
-  HTTPRoute of your own with TLS.
+- **ClusterIP only:** with `networkPolicy.enabled` off (the default), any pod
+  in the cluster can reach port 8080, so the password is the only gate. Turn
+  the NetworkPolicy on and only the namespaces in `networkPolicy.editorFrom` can
+  reach it. Reach it with `kubectl port-forward`, or an HTTPRoute of your own
+  with TLS.
 - **Forged requests:** every change is a POST, checked by Go's
   `CrossOriginProtection` (`Sec-Fetch-Site`, then `Origin`); a POST with none of
   `Sec-Fetch-Site`, `Origin` and `Referer` is refused too. Pages carry
@@ -51,6 +53,24 @@ produce an attestation that passes this.
 - **Audit:** one JSON log line per write, with the object, the changed fields
   and the client address. Behind `kubectl port-forward` the address is always
   `127.0.0.1`.
+
+## Running it
+
+- **NetworkPolicy:** `networkPolicy.enabled=true` lets only Envoy Gateway's
+  proxy pods in the listed namespaces reach authz (9001); the editor (8080) and
+  metrics (8081) are then reachable only from the namespaces you list. On most
+  CNIs traffic from the pod's own node (kubelet, hostNetwork pods) is always
+  allowed.
+  Recommended where the CNI enforces it; the e2e suite checks that it blocks.
+- **pprof is off by default** and only binds to loopback (`127.0.0.1`,
+  `localhost`, `[::1]`): the chart schema and `serve` refuse anything else.
+  Profiling the process that answers `Check()` from elsewhere could slow it into
+  failing open.
+- **Metrics carry no host, route or window names**, so scraping them leaks
+  nothing about which apps exist.
+- **RBAC is narrow:** SecurityPolicies may only be updated or deleted under our
+  own name, the uninstall hook has its own ServiceAccount, and the pods write no
+  Events.
 
 ## Walls (a hostile PR cannot remove them)
 

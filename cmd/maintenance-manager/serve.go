@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -24,12 +26,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 	"github.com/prosperity-solutions/maintenance-manager/internal/authz"
 	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
 	"github.com/prosperity-solutions/maintenance-manager/internal/editor"
+	"github.com/prosperity-solutions/maintenance-manager/internal/metrics"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -39,6 +43,7 @@ type serveConfig struct {
 	ArmingLeadTime time.Duration // how long before a phase the routes are armed
 	MetricsAddr    string
 	EditorAddr     string
+	PprofAddr      string // empty: no pprof
 	Bypass         string // MM_BYPASS_TOKEN; empty disables the bypass
 	EditorPassword string // MM_EDITOR_PASSWORD; empty turns the editor off
 }
@@ -49,6 +54,7 @@ func parseServe(args []string) (serveConfig, error) {
 	fs.DurationVar(&cfg.ArmingLeadTime, "arming-lead-time", 15*time.Minute, "arm routes this long before a dated phase starts")
 	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", ":8081", "metrics and health address (/metrics, /healthz, /readyz)")
 	fs.StringVar(&cfg.EditorAddr, "editor-addr", editor.Addr, "editor address (HTTP basic auth, user admin)")
+	fs.StringVar(&cfg.PprofAddr, "pprof-addr", "", "serve net/http/pprof here, e.g. 127.0.0.1:6060 (off when empty; reach it with kubectl port-forward)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -57,6 +63,12 @@ func parseServe(args []string) (serveConfig, error) {
 	}
 	if cfg.Bypass != "" && len(cfg.Bypass) < 16 {
 		return cfg, errors.New("MM_BYPASS_TOKEN must be empty (bypass off) or at least 16 characters: the status endpoint would make a short token guessable")
+	}
+	if cfg.PprofAddr != "" {
+		host, _, err := net.SplitHostPort(cfg.PprofAddr)
+		if err != nil || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+			return cfg, fmt.Errorf("--pprof-addr must be a loopback address such as 127.0.0.1:6060 (reach it with kubectl port-forward), got %q: profiling the process that answers Check() from elsewhere would slow it into failing open", cfg.PprofAddr)
+		}
 	}
 	if cfg.ArmingLeadTime < 0 {
 		return cfg, fmt.Errorf("--arming-lead-time must not be negative, got %s", cfg.ArmingLeadTime)
@@ -137,6 +149,14 @@ func serve(args []string, log *slog.Logger) int {
 		}
 		log.Error("serve: manager", "err", err)
 		return 1
+	}
+
+	metrics.Register(ctrlmetrics.Registry)
+	if cfg.PprofAddr != "" {
+		if err := mgr.Add(pprofServer(cfg.PprofAddr, log)); err != nil {
+			log.Error("serve: add pprof", "err", err)
+			return 1
+		}
 	}
 
 	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.shutting.Store(true) }}
@@ -223,3 +243,29 @@ func (r *readiness) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// pprofServer serves net/http/pprof on addr until the manager stops. Off by
+// default: profiles show internals, so bind it to 127.0.0.1 and reach it with
+// kubectl port-forward. A failure to bind is logged, never fatal (authz runs
+// in the same process).
+func pprofServer(addr string, log *slog.Logger) manager.RunnableFunc {
+	return func(ctx context.Context) error {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			<-ctx.Done()
+			_ = srv.Close()
+		}()
+		log.Info("pprof listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("pprof stopped; authz keeps serving", "err", err)
+			<-ctx.Done()
+		}
+		return nil
+	}
+}

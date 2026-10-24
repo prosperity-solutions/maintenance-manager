@@ -8,6 +8,7 @@ import (
 	"maps"
 	"runtime/debug"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +29,7 @@ import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/metrics"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -109,7 +111,8 @@ func (c *Controller) Start(ctx context.Context) error {
 }
 
 // campaign runs one leader election; it reports whether lead gave up.
-func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) (gaveUp bool) {
+func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) bool {
+	var gaveUp atomic.Bool
 	defer c.recover("campaign")
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -128,9 +131,20 @@ func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) (g
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				c.Log.Info("leading: the controller arms and disarms routes")
+				// Inc/Dec, not Set: client-go does not wait for an old term's
+				// callback, so terms can overlap briefly.
+				metrics.Leader.Inc()
+				defer func() {
+					metrics.Leader.Dec()
+					// Leader-only gauges: not ours any more. After overlapping
+					// terms they may read 0 until the next reconcile.
+					metrics.ArmedRoutes.Set(0)
+					metrics.Conflicts.Set(0)
+				}()
 				// lead returns while still leading only when it gives up: stop
-				// renewing, so another replica can take over.
-				gaveUp = c.lead(ctx)
+				// renewing, so another replica can take over. Atomic: client-go
+				// runs this callback in its own goroutine and does not wait for it.
+				gaveUp.Store(c.lead(ctx))
 				cancelRun()
 			},
 			OnStoppedLeading: func() { c.Log.Info("not leading any more") },
@@ -141,7 +155,7 @@ func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) (g
 		return false
 	}
 	elector.Run(runCtx) // returns when leadership is lost, lead gives up, or ctx is done
-	return gaveUp
+	return gaveUp.Load()
 }
 
 func (c *Controller) recover(where string) {
@@ -391,9 +405,23 @@ func (c *Controller) reconcileOnce(ctx context.Context, rec *Reconciler) (res Re
 		if p := recover(); p != nil {
 			err = fmt.Errorf("panic: %v", p)
 		}
+		if err != nil {
+			metrics.ReconcileError.Inc()
+		} else {
+			metrics.ReconcileOK.Inc()
+		}
 	}()
 	res, err = rec.Reconcile(ctx)
 	c.logConflicts(res.Desired.Conflicts)
+	metrics.Writes.Add(float64(res.Writes))
+	if err == nil { // a failed read leaves Desired partial: keep the last good values
+		armedNow := 0
+		for _, rs := range res.Desired.Routes {
+			armedNow += len(rs)
+		}
+		metrics.ArmedRoutes.Set(float64(armedNow))
+		metrics.Conflicts.Set(float64(len(res.Desired.Conflicts)))
+	}
 	if err == nil && res.Writes > 0 {
 		armed := 0
 		for _, rs := range res.Desired.Routes {

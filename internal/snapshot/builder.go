@@ -16,6 +16,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/metrics"
 )
 
 // Debounce timing (§3): rebuild 100 ms after the last change, but at most
@@ -207,6 +208,10 @@ func (b *Builder) rebuild(ctx context.Context) (time.Time, error) {
 	t0 := time.Now()
 	snap := Build(in)
 	b.OnSnapshot(snap)
+	metrics.SnapshotBuilds.Inc()
+	metrics.SnapshotBuildSeconds.Observe(time.Since(t0).Seconds())
+	metrics.SnapshotRoutes.Set(float64(len(snap.Routes)))
+	metrics.SnapshotTimestamp.Set(float64(time.Now().Unix()))
 	// Any HTTPRoute change in the cluster rebuilds; say so at Info only when
 	// the set of covered routes changes size.
 	level := slog.LevelDebug

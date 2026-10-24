@@ -33,6 +33,23 @@
         "existingSecret": { "type": "string" }
       }
     },
+    "pprof": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr": { "type": "string", "pattern": "^((127\\.0\\.0\\.1|localhost|\\[::1\\]):[0-9]{1,5})?$", "description": "A loopback host:port (reach it with kubectl port-forward), or empty (off)." }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "envoyNamespaces": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "editorFrom": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "metricsFrom": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "bypass": {
       "type": "object",
       "additionalProperties": false,

@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
+	"github.com/prosperity-solutions/maintenance-manager/internal/metrics"
 )
 
 // Addr is the editor's port (§10, §11).
@@ -197,6 +198,7 @@ func (s *Server) auth(h http.Handler) http.Handler {
 		}
 		release, ok := slots.take(clientAddr(r))
 		if !ok {
+			metrics.EditorAuth.WithLabelValues("throttled").Inc()
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "too many login attempts; try again in a second", http.StatusTooManyRequests)
 			return
@@ -204,9 +206,11 @@ func (s *Server) auth(h http.Handler) http.Handler {
 		gotUser, got := sha256.Sum256([]byte(u)), sha256.Sum256([]byte(p))
 		if subtle.ConstantTimeCompare(gotUser[:], wantUser[:])&subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
 			release()
+			metrics.EditorAuth.WithLabelValues("ok").Inc()
 			h.ServeHTTP(w, r)
 			return
 		}
+		metrics.EditorAuth.WithLabelValues("failed").Inc()
 		s.Log.Warn("editor login failed", "client", clientAddr(r))
 		w.Header().Set("WWW-Authenticate", `Basic realm="maintenance-manager", charset="UTF-8"`)
 		http.Error(w, "login required (user admin)", http.StatusUnauthorized)
@@ -386,6 +390,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg st
 // client. Behind a port-forward the client is always 127.0.0.1.
 func (s *Server) audit(r *http.Request, verb, kind, name string, before, after any) {
 	s.viewStale.Store(true) // the next page shows the effect of this write
+	metrics.EditorWrite(verb)
 	s.Log.Info("editor write", "verb", verb, "kind", kind, "name", name, "fields", changedFields(before, after), "client", clientAddr(r))
 }
 
