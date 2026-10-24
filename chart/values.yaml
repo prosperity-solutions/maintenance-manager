@@ -30,8 +30,8 @@ networkPolicy:
   enabled: false
   # Namespaces where Envoy Gateway runs its proxy pods: its own namespace by
   # default. In GatewayNamespace deploy mode the proxies run in each Gateway's
-  # namespace: list those, or authz is unreachable and traffic flows as if no
-  # window were active (fail-open).
+  # namespace: list those, or authz is unreachable: traffic flows as if no
+  # window were active (fail-open), after waiting the 100 ms ext_authz timeout.
   envoyNamespaces: [envoy-gateway-system]
   # Namespaces allowed to reach the editor, e.g. the Envoy namespace when an
   # HTTPRoute of your own points at it.

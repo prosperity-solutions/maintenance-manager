@@ -58,8 +58,9 @@ produce an attestation that passes this.
 
 - **NetworkPolicy:** `networkPolicy.enabled=true` lets only Envoy Gateway's
   proxy pods in the listed namespaces reach authz (9001); the editor (8080) and
-  metrics (8081) are then reachable only from the namespaces you list. Traffic
-  from the pod's own node (kubelet, hostNetwork pods) is always allowed.
+  metrics (8081) are then reachable only from the namespaces you list. On most
+  CNIs traffic from the pod's own node (kubelet, hostNetwork pods) is always
+  allowed.
   Recommended where the CNI enforces it; the e2e suite checks that it blocks.
 - **pprof is off by default** and only binds to loopback (`127.0.0.1`,
   `localhost`, `[::1]`): the chart schema and `serve` refuse anything else.

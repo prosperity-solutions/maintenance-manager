@@ -59,7 +59,8 @@ checks the image. More in [docs/security.md](docs/security.md).
 
 1. Organization settings → Helm repositories: add
    `oci://ghcr.io/prosperity-solutions/charts` (OCI, public).
-2. Add a Helm service: chart `maintenance-manager`, the release's version,
+2. Add a Helm service: chart `maintenance-manager`, the release's version
+   (verify that version's chart digest first, as above; Qovery takes a version),
    **Allow cluster-wide resources** on, and `editor.password` from a Qovery
    secret.
 3. Deploy.
@@ -183,9 +184,11 @@ stylesheet, not inline CSS.
   proxy pods in `networkPolicy.envoyNamespaces` reach authz on port 9001, and
   any pod of the namespaces you list reach the editor and metrics (`editorFrom`,
   `metricsFrom`). In Envoy Gateway's GatewayNamespace deploy mode, list the
-  Gateways' namespaces, or authz is unreachable and windows silently do nothing.
-  Traffic from a pod's own node is always allowed (kubelet probes, hostNetwork
-  pods), and `kubectl port-forward` still works.
+  Gateways' namespaces: otherwise authz is unreachable, windows silently do
+  nothing, and every request on an armed route waits the 100 ms ext_authz
+  timeout before failing open. On most CNIs traffic from a pod's own node is
+  always allowed (kubelet probes, hostNetwork pods), and `kubectl port-forward`
+  still works.
 - **Failure:** if maintenance-manager is down, slow or misconfigured, Envoy
   lets traffic through (fail-open). Disabling a window always works, from the
   editor or with `kubectl -n maintenance-manager patch mmw <window> --type=merge

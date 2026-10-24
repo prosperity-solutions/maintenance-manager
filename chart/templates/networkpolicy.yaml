@@ -1,9 +1,9 @@
 {{- if .Values.networkPolicy.enabled }}
 # Ingress to the maintenance-manager pods (docs/HANDOVER.md §11, M7): authz
 # (9001) only from Envoy Gateway's proxy pods in the listed namespaces, the
-# editor (8080) and metrics (8081) only from the namespaces listed. Traffic
-# from the pod's own node is always allowed (kubelet probes; also hostNetwork
-# pods there), and kubectl port-forward does not pass through
+# editor (8080) and metrics (8081) only from the namespaces listed. On most
+# CNIs traffic from the pod's own node is always allowed (kubelet probes; also
+# hostNetwork pods there), and kubectl port-forward does not pass through
 # NetworkPolicies. Egress is not restricted (the API server).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

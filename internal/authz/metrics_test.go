@@ -56,3 +56,30 @@ func TestCheckCountsEachResultOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckCountsBannerAndInterstitial(t *testing.T) {
+	for _, c := range []struct {
+		action mmv1.Action
+		accept string
+		want   prometheus.Counter
+	}{
+		{mmv1.ActionBanner, browser, metrics.CheckBanner},
+		{mmv1.ActionInterstitial, browser, metrics.CheckInterstitialPage},
+		{mmv1.ActionInterstitial, "application/json", metrics.CheckInterstitialPass},
+	} {
+		svc := mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Name: "shop"},
+			Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "shop"}}}}
+		w := mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Name: "w", UID: "u"}, Spec: mmv1.MaintenanceWindowSpec{Enabled: true,
+			Phases: []mmv1.Phase{{Name: "p", Action: c.action, Routings: []mmv1.Routing{{Services: []string{"shop"}}}}}}}
+		s := &Server{Now: func() time.Time { return tDown }}
+		s.Update(snapshot.Build(snapshot.Input{Windows: []mmv1.MaintenanceWindow{w}, Services: []mmv1.MaintenanceService{svc}, Now: tDown,
+			Routes: []snapshot.RouteInfo{{Key: snapshot.RouteKey{Namespace: "shop", Name: "web"}, Labels: map[string]string{"app": "shop"}}}}))
+		before := testutil.ToFloat64(c.want)
+		if _, err := s.Check(t.Context(), req{headers: map[string]string{"accept": c.accept}}.build()); err != nil {
+			t.Fatal(err)
+		}
+		if d := testutil.ToFloat64(c.want) - before; d != 1 {
+			t.Errorf("%s with %s: counted %v times", c.action, c.accept, d)
+		}
+	}
+}

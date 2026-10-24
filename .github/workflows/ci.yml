@@ -166,6 +166,8 @@ jobs:
             --set networkPolicy.enabled=true --set 'networkPolicy.editorFrom={envoy-gateway-system}' \
             --set 'networkPolicy.metricsFrom={monitoring}' --set pprof.addr=127.0.0.1:6060 > "$RUNNER_TEMP/chart-all.yaml"
           grep -q 'kind: NetworkPolicy' "$RUNNER_TEMP/chart-all.yaml"
+          # The argument exactly as serve parses it (no quotes inside the value).
+          grep -qx -- '            - --pprof-addr=127.0.0.1:6060' "$RUNNER_TEMP/chart-all.yaml"
           scripts/dev/t kubeconform -strict -summary -kubernetes-version 1.34.12 \
             -schema-location default -skip CustomResourceDefinition "$RUNNER_TEMP/chart-all.yaml"
           # The install must fail without an editor password.
