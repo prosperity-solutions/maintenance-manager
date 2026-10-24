@@ -4,6 +4,7 @@
 package workflows
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,7 @@ type job struct {
 	TimeoutMinutes int               `yaml:"timeout-minutes"`
 	Permissions    yaml.Node         `yaml:"permissions"`
 	Concurrency    yaml.Node         `yaml:"concurrency"`
+	Environment    yaml.Node         `yaml:"environment"`
 	Env            map[string]string `yaml:"env"`
 	Steps          []step            `yaml:"steps"`
 }
@@ -175,6 +177,8 @@ func TestNoSecretsNoCacheNoArtifacts(t *testing.T) {
 		if strings.Contains(w.raw, "secrets.") {
 			t.Errorf("%s: no secrets. expressions; the repo has none (§18)", name)
 		}
+		// actions/upload-pages-artifact does not match: the site job's Pages
+		// artifact is the one exception to A3 (TestSiteJobs).
 		for _, forbidden := range []string{"actions/cache", "actions/upload-artifact", "actions/download-artifact", "pull_request_target", "workflow_run"} {
 			if strings.Contains(w.raw, forbidden) {
 				t.Errorf("%s: %s is not allowed (§15, A2, A3)", name, forbidden)
@@ -283,21 +287,77 @@ func TestReleaseJobs(t *testing.T) {
 		}
 	}
 
-	attest := jobs["attest"]
-	for i, s := range attest.Steps {
-		if s.Run != "" || strings.HasPrefix(s.Uses, "actions/checkout@") || !strings.HasPrefix(s.Uses, "actions/") {
-			t.Errorf("attest step %d: no checkout, no run:, first-party actions only (A4)", i)
+	for _, id := range oidcJobs {
+		for i, s := range jobs[id].Steps {
+			if s.Run != "" || strings.HasPrefix(s.Uses, "actions/checkout@") || !strings.HasPrefix(s.Uses, "actions/") {
+				t.Errorf("%s step %d: no checkout, no run:, first-party actions only (A4)", id, i)
+			}
 		}
 	}
 	for id, j := range jobs {
-		if id == "attest" {
+		if slices.Contains(oidcJobs, id) {
 			continue
 		}
 		var perms map[string]string
 		_ = j.Permissions.Decode(&perms)
 		if _, ok := perms["id-token"]; ok {
-			t.Errorf("%s: only attest may hold id-token (A4)", id)
+			t.Errorf("%s: only %v may hold id-token (A4)", id, oidcJobs)
 		}
+	}
+}
+
+// The only jobs that hold an OIDC token (A4).
+var oidcJobs = []string{"attest", "pages"}
+
+// The website deploys from main only (docs/HANDOVER.md §15.1), and the OIDC
+// job does nothing but deploy.
+func TestSiteJobs(t *testing.T) {
+	w := loadWorkflows(t)["ci.yml"]
+	jobs := w.wf.Jobs
+	site, pages := jobs["site"], jobs["pages"]
+	if got, want := site.If, "${{ !cancelled() && needs.all-green.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"; got != want {
+		t.Errorf("site: if: %q, want %q", got, want)
+	}
+	if !site.Permissions.IsZero() {
+		t.Error("site: no permissions beyond the workflow's contents: read")
+	}
+	if got, want := pages.If, "${{ !cancelled() && needs.site.result == 'success' }}"; got != want {
+		t.Errorf("pages: if: %q, want %q", got, want)
+	}
+	if got := pages.needs(); !slices.Equal(got, []string{"site"}) {
+		t.Errorf("pages: needs %v, want [site]", got)
+	}
+	var perms map[string]string
+	_ = pages.Permissions.Decode(&perms)
+	if !maps.Equal(perms, map[string]string{"pages": "write", "id-token": "write"}) {
+		t.Errorf("pages: permissions = %v, want exactly pages and id-token write", perms)
+	}
+	var env struct {
+		Name string `yaml:"name"`
+	}
+	_ = pages.Environment.Decode(&env)
+	if env.Name != "github-pages" {
+		t.Errorf("pages: environment = %q, want github-pages (its branch policy admits only main)", env.Name)
+	}
+	if len(pages.Steps) != 1 || !strings.HasPrefix(pages.Steps[0].Uses, "actions/deploy-pages@") {
+		t.Error("pages: the only step must be actions/deploy-pages")
+	}
+
+	// A3: the Pages artifact is uploaded once, by site, from site/ only.
+	if n := strings.Count(w.raw, "actions/upload-pages-artifact@"); n != 1 {
+		t.Errorf("actions/upload-pages-artifact appears %d times, want once (in site)", n)
+	}
+	found := false
+	for _, s := range site.Steps {
+		if strings.HasPrefix(s.Uses, "actions/upload-pages-artifact@") {
+			found = true
+			if s.With["path"] != "site" {
+				t.Errorf("site: upload-pages-artifact path = %q, want site", s.With["path"])
+			}
+		}
+	}
+	if !found {
+		t.Error("site: must upload the Pages artifact")
 	}
 }
 

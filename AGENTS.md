@@ -123,6 +123,8 @@ updates, together:
 - [ ] `README.md`
 - [ ] `docs/HANDOVER.md`
 - [ ] `chart/values.schema.json` and the CRD markers (then `go generate ./...`)
+- [ ] `site/index.html`, if the website shows it (install, phases, client snippet)
+- [ ] `site/problems/maintenance/index.html`, if the problem+json body or headers change
 
 A purely internal change says so in the PR body.
 

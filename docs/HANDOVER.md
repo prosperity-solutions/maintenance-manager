@@ -638,7 +638,7 @@ If a measured behaviour contradicts a claim here (drain, `Merged`, an API field)
 ## 14. Repo layout & modules
 
 ```
-.github/workflows/ci.yml       the only workflow (CI + release, §15/§16)
+.github/workflows/ci.yml       the only workflow (CI + release + website, §15/§16)
 .github/dependabot.yml  .github/fresh-deps.txt
 .agents/skills/ship/SKILL.md   (+ .claude/skills/ship → symlink, docs/ship.md → symlink)
 .claude/settings.json  .claude/agents/{builder,code-reviewer,explorer,researcher}.md
@@ -651,6 +651,7 @@ internal/render/               templates, prerender, problem+json, default page 
 internal/locale/               negotiation
 internal/editor/               HTTP handlers + templates (embed.FS)
 client/                        maintenance-manager.js + *.test.mjs
+site/                          the website: static HTML pages, no build, no JavaScript (§15.1)
 chart/                         Helm chart (templates/crds generated)
 test/e2e/  test/workflows/
 tools/go.mod  tools/depage/    pinned tools module + the dependency-age checker
@@ -692,8 +693,8 @@ AGENTS.md CLAUDE.md README.md SECURITY.md LICENSE NOTICE lefthook.yml .golangci.
 gate ─┬─ commits* ─┐
       ├─ ship*  ───┤
       ├─ lint ─────┤
-      ├─ test ─────┼─ all-green ─▶ publish† ─▶ attest† ─▶ release† ─▶ verify†
-      └─ e2e(×2) ──┘
+      ├─ test ─────┼─ all-green ─┬▶ publish† ─▶ attest† ─▶ release† ─▶ verify†
+      └─ e2e(×2) ──┘             └▶ site† ─▶ pages†
 * pull_request only    † push to main only
 ```
 
@@ -705,11 +706,13 @@ gate ─┬─ commits* ─┐
 | `lint` | `gofmt -l`, `go vet`, golangci-lint, `go mod verify` and `go -C tools mod verify`, `govulncheck ./...`, `go generate` drift (`git diff --exit-code`), `go test ./test/workflows`, `scripts/ci/ship-gate.sh --selftest`, actionlint, zizmor (`advanced-security: false`, pinned `version`; online audits with `${{ github.token }}` on PRs, offline on `main`), `go -C tools run ./depage` plus `go -C tools test ./...` (`tools/` is its own module, so the root `./...` doesn't include it), licence check (§19). Once the chart exists it also runs `helm lint`, `helm template` and kubeconform, and rehearses the publish steps (§16.3). |
 | `test` | `go test -race ./...`, the benchmark gate, `go test -tags envtest ./internal/controller/...`, `node --test 'client/*.test.mjs'` |
 | `e2e` | matrix `eg: [v1.8.3, v1.9.1]` (§13.2) |
+| `site`, `pages` | The website (§15.1). |
 | `all-green` | `if: always()`. It fails unless every needed job is `success`. Exceptions: on `push`, `commits` and `ship` must be `skipped`; on a **draft** PR it fails on purpose ("draft: CI not run"), so a draft never shows a green required check. This is the only required status check. |
 
 **Job conditions.** A job's implicit `success()` covers its whole `needs` chain, and on `push` the PR-only jobs are skipped, so every job after `all-green` needs an explicit `if:`:
 - `publish`: `if: ${{ !cancelled() && needs.all-green.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}`
 - `attest`, `release`, `verify`: `if: ${{ !cancelled() && needs.<previous>.result == 'success' && needs.publish.outputs.released == 'true' }}`
+- `site`: the same `if:` as `publish`; `pages`: `if: ${{ !cancelled() && needs.site.result == 'success' }}`
 
 **Bootstrap scope.** The bootstrap `ci.yml` contains `gate`, `commits`, `ship`, `lint` (Go + workflow parts), `all-green`, and the release jobs. The PR that introduces each target adds its job:
 - `test`: M1
@@ -722,6 +725,23 @@ gate ─┬─ commits* ─┐
 - `setup-go` caching is on for `lint`, `test` and `e2e`, with `cache-dependency-path: go.sum tools/go.sum`, so tool builds are cached too. It is ref-scoped: `main` never reads PR caches.
 - Caching is **off in every release job**.
 - No `actions/cache` anywhere.
+
+### 15.1 Website
+
+`site/index.html` is the project's website, served by GitHub Pages at
+`https://maintenance-manager.oss.life.li`. It is static HTML: no build, no
+JavaScript, no web fonts (Comic Sans is asked for by name, never shipped). On
+every push to `main`, `site` uploads `site/` as the Pages artifact and `pages`
+deploys it. `ci.yml` stays the only workflow, so `pages` is the second job with
+an OIDC token, locked down like `attest` (A4). The owner turns Pages on with
+`scripts/dev/harden-public-repo.sh` (§21.3 step 5) after adding the DNS record
+`CNAME maintenance-manager.oss.life.li → prosperity-solutions.github.io`, and
+before the first merge that touches it: until Pages is on, `pages` fails on
+every `main` run. The org should list `oss.life.li` as a verified Pages domain,
+so no other account can claim the name if Pages is ever turned off.
+
+`site/problems/maintenance/` is the page behind the problem+json `type` URI
+(`internal/render`), so that URI resolves to docs, as RFC 9457 intends.
 
 ## 16. Release (jobs in `ci.yml`, push to `main` only)
 
@@ -742,7 +762,7 @@ Serialized by the workflow-level `main` concurrency group (§15). Cancelled *pen
 | `release` | `contents: write`, `packages: read` | 1. harden-runner <br> 2. checkout at `${{ github.sha }}` (`persist-credentials: false`) <br> 3. setup-go (`cache: false`) <br> 4. `helm registry login ghcr.io` with `${{ github.token }}` (packages may still be private) <br> 5. `helm pull oci://… --version X.Y.Z` and confirm the printed digest equals `${chart_digest}` (Helm names a `tag@digest` pull `<chart>@sha256-….tgz`, not `<chart>-X.Y.Z.tgz`) <br> 6. write `SHA256SUMS` over the chart `.tgz` and `client/maintenance-manager.js` (unconditionally since M6: a moved file fails the release instead of silently dropping the asset) <br> 7. `go-licenses report ./... > THIRD_PARTY_LICENSES.csv` (it writes CSV to stdout) <br> 8. fail if tag `vX.Y.Z` already exists and doesn't point at `${{ github.sha }}`. If a draft `vX.Y.Z` already exists (a re-run or a retried version), reuse it, but first `gh release edit vX.Y.Z --target ${{ github.sha }}`. Otherwise `gh release create vX.Y.Z --draft --target ${{ github.sha }} --notes-file …` (notes generated from commit subjects into a file, never interpolated into `run:`) <br> 9. `gh release upload --clobber` the assets <br> 10. verify every asset by name and size <br> 11. `gh release edit --draft=false`, which creates the tag and locks the release |
 | `verify` | `contents: read`, `packages: read`, `attestations: read` | 1. harden-runner <br> 2. checkout + setup-go (`cache: false`), for the `go tool` crane/helm <br> 3. `crane auth login` / `helm registry login` to ghcr.io with `${{ github.token }}`. Anonymous pulls are only checked at handback (§21.4) <br> 4. `gh attestation verify oci://ghcr.io/prosperity-solutions/maintenance-manager@${image_digest} --repo prosperity-solutions/maintenance-manager --signer-workflow prosperity-solutions/maintenance-manager/.github/workflows/ci.yml --source-ref refs/heads/main --deny-self-hosted-runners`, and the same for the chart <br> 5. `crane manifest` shows both platforms <br> 6. `helm template --set editor.password=<12+ characters>` of the pulled chart renders |
 
-- **Hand-offs:** digests and the version pass between jobs **only as `needs.*.outputs`**. No artifacts are used at all.
+- **Hand-offs:** digests and the version pass between jobs **only as `needs.*.outputs`**. No release job uses an artifact; the website's Pages artifact (§15.1) is the only one in `ci.yml`.
 - **No secrets.** Only `GITHUB_TOKEN` and GitHub OIDC.
 - **`gh` in jobs:** every job that runs `gh` sets `GH_TOKEN: ${{ github.token }}` in `env:`.
 - **Recovery:**
@@ -778,8 +798,8 @@ Serialized by the workflow-level `main` concurrency group (§15). Cancelled *pen
 |---|---|---|
 | A1 | Script injection via PR title, branch or body | Never interpolate `${{ }}` of untrusted values into `run:`; pass them through `env:`. Never write untrusted values to `GITHUB_ENV`/`GITHUB_OUTPUT`/`GITHUB_PATH`. `prmeta.sh` and `ship-gate.sh` take the branch as a quoted argument, use `printf '%s'`, and never `eval` |
 | A2 | Cache poisoning into a release | Release jobs use no cache (`setup-go` `cache: false`) |
-| A3 | Artifact poisoning between jobs | No artifacts; outputs and registry digests only |
-| A4 | OIDC token misuse (`id-token: write`) | Only `attest` holds it: no checkout, no `run:`, first-party actions only. The owner confirms no org cloud trust policy matches `repo:prosperity-solutions/*` with a wildcard `sub` |
+| A3 | Artifact poisoning between jobs | No artifacts; outputs and registry digests only. One exception: `site` uploads `site/` as the Pages artifact, built on `main` and read only by `pages`, never by a release job |
+| A4 | OIDC token misuse (`id-token: write`) | Only `attest` and `pages` hold it (Pages requires it): no checkout, no `run:`, first-party actions only; `pages` has one step, `actions/deploy-pages`, and its `github-pages` environment admits only `main` (a repo setting, so a branch run cannot publish the site). The owner confirms no org cloud trust policy matches `repo:prosperity-solutions/*` with a wildcard `sub` |
 | A5 | `packages: write` used to push elsewhere | `test/workflows` asserts the only push targets are `ghcr.io/prosperity-solutions/maintenance-manager` and `…/charts/maintenance-manager` |
 | A6 | Malicious dependency | `go.sum` + `go mod verify`, the 7-day rule, govulncheck, a minimal dependency allowlist, the licence allowlist |
 | A7 | Third-party images in e2e | kind node, echo image and EG chart pinned by digest. CI's token is read-only there |
@@ -800,7 +820,7 @@ Serialized by the workflow-level `main` concurrency group (§15). Cancelled *pen
   - The allow-list contains: `github.com`, `api.github.com`, `uploads.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `raw.githubusercontent.com` (setup-go manifest), `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, the base image registry, Sigstore's `tuf-repo-cdn.sigstore.dev`, `fulcio.sigstore.dev` and `rekor.sigstore.dev`, GitHub's `tuf-repo.github.com` and attestation bundle storage `tmaproduction.blob.core.windows.net` (both used by `gh attestation verify`; the latter added after the first release), and the Actions runner hosts.
   - Never `dns.google` or a wildcard `*.githubusercontent.com`. Tighten the list after the first run's audit.
   - Expect a missed endpoint on the first release; fixing it is a `ci:` PR.
-- **`attest`** has no checkout and no `run:` step.
+- **`attest`** and **`pages`** have no checkout and no `run:` step; `pages` has exactly one step, `actions/deploy-pages`, and the `github-pages` environment.
 - **`publish`**: no `setup-*` cache, and only the two allowed push targets (A5).
 
 ### 17.3 Dependencies
@@ -865,7 +885,7 @@ How the PAT is used:
 ## 20. Agentic harness — the ship workflow
 
 Ported from `prosperity-solutions/outfit` (MIT). Port the mindset and the mechanics. Drop everything outfit-specific:
-- macOS signing, minisign, GoReleaser, `install.sh` and its tests, `site/`, `pages.yml`;
+- macOS signing, minisign, GoReleaser, `install.sh` and its tests, `pages.yml` (the website deploys from `ci.yml` instead, §15.1);
 - the git-version matrix, `docs/git-behavior.md`, and the CLI conventions (`--json`, exit codes, "never overwrite user bytes");
 - Python helpers, the macOS `find /` hook, and the `UserPromptSubmit` nag;
 - the veld provenance chain.
@@ -1074,7 +1094,8 @@ The script is idempotent and safe to re-run, and is pure `gh api`. In order, it:
      - `refs/tags/v*`;
      - rules: update (no fetch-and-merge), deletion;
      - creation stays open. Tags are created only when a release is published, and immutable releases lock them. Roll forward only: a bad version is superseded, never deleted.
-5. **Print a summary** of every setting as read back.
+5. **GitHub Pages** (added with the website, §15.1): `build_type: workflow`, the custom domain `maintenance-manager.oss.life.li`, a `github-pages` environment that deploys from `main` only, then `https_enforced` (refused until the certificate exists; re-run the script).
+6. **Print a summary** of every setting as read back.
 
 Claude then verifies everything with read-only `gh api` GET calls and reports any mismatch with the exact fix. With the optional PAT, `security_and_analysis` may be hidden; then the script's summary is the evidence. Then it asks you to restart the session with `claude --continue --permission-mode auto`, and to paste the `/goal …` line from §22 as your first message. Settings and hooks load live, but the subagents in `.claude/agents/` and the `ship` skill created at bootstrap load only after a restart. **After the `/goal`, you can walk away.**
 
@@ -1109,7 +1130,7 @@ Repeated denials pause auto mode entirely: 3 in a row, or 20 in total.
 | M4 | **Controller:** `Plan()`, per-namespace SP, grants, mergeType, conflicts, GC, `RequeueAfter`, `cleanup` + pre-delete hook; fixtures removed; envtest job | envtest green; E6, E7, E9, E10 green |
 | M5 | **Editor:** dashboard, the three CRUD screens, Start next phase now, CSRF, preview, tz handling | form round-trip tests lossless; E11 green |
 | M6 | **JS client** + node job + embedding docs | node tests green; asset attached to the release |
-| M7 | **Hardening & docs:** metrics, the pprof flag, graceful shutdown; README (pitch, install-by-digest, verify command, security note, drain note, Qovery how-to), `docs/security.md`, `docs/release.md`, `docs/testing.md` | everything in §24 holds |
+| M7 | **Hardening & docs:** metrics, the pprof flag, graceful shutdown; README (pitch, install-by-digest, verify command, security note, drain note), `docs/security.md`, `docs/release.md`, `docs/testing.md` | everything in §24 holds |
 
 ## 23. Phase 3 — handback
 
