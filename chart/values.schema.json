@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "maintenance-manager values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "description": "Defaults to \"v\" + appVersion." },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[0-9a-f]{64})?$",
+          "description": "Wins over tag. The release pipeline pins it."
+        },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "armingLeadTime": {
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(h|m|s|ms))+$",
+      "description": "A Go duration, e.g. 15m."
+    },
+    "goMemLimit": { "type": "string", "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)?$" },
+    "editor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "password": { "type": "string" },
+        "existingSecret": { "type": "string" }
+      }
+    },
+    "bypass": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": { "type": "string" }
+      }
+    },
+    "resources": { "type": "object" }
+  }
+}

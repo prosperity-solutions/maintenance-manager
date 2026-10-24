@@ -1,0 +1,39 @@
+# Release namespace only: our resources, the ReferenceGrants that let app
+# namespaces reach our Service, the leader-election Lease, and scaling our own
+# Deployment to zero on uninstall. docs/HANDOVER.md §11.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "mm.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [maintenance-manager.oss.life.li]
+    resources: [maintenanceservices, maintenancepages, maintenancewindows]
+    verbs: ["*"]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [referencegrants]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "mm.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "mm.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "mm.name" . }}
+    namespace: {{ .Release.Namespace }}

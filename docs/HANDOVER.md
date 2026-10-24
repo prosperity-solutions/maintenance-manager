@@ -692,7 +692,7 @@ Serialized by the workflow-level `main` concurrency group (§15). Cancelled *pen
   - A release can't be created or published on a commit that is behind `main` when a later merge changed `.github/workflows/`: `GITHUB_TOKEN` lacks Workflows permission and gets a 404. In that case, don't re-run; let the next releasable merge carry the version.
 
 ### 16.3 Chart validation
-`helm lint --set editor.password=x`, then `helm template --set editor.password=x … | kubeconform -strict -kubernetes-version <newest version published in the default schema repo> -schema-location default`. The chart renders no instances of our own CRDs, so no custom schemas are needed. `values.schema.json` validates the values themselves.
+`helm lint --set editor.password=x`, then `helm template --set editor.password=x … | kubeconform -strict -kubernetes-version <newest version published in the default schema repo> -schema-location default -skip CustomResourceDefinition`. The chart renders no instances of our own CRDs, so no custom schemas are needed. The default schema repo has no schema for the `CustomResourceDefinition` kind itself (verified at M1: 404 for `customresourcedefinition-apiextensions-v1.json` in v1.34.12), so that kind is skipped; a real API server validates our CRDs in e2e (kind) and envtest. `values.schema.json` validates the values themselves, and `lint` also asserts that `helm template` fails without an editor password.
 
 ## 17. Supply chain & malicious-PR hardening
 

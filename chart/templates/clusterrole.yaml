@@ -1,0 +1,39 @@
+# Cluster-wide: read routes and their parents, own SecurityPolicies in app
+# namespaces, and write events. docs/HANDOVER.md §11.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "mm.name" . }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [httproutes, gateways, listenersets]
+    verbs: [get, list, watch]
+  - apiGroups: [gateway.networking.x-k8s.io]
+    resources: [xlistenersets]
+    verbs: [get, list, watch]
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [securitypolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "mm.name" . }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "mm.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "mm.name" . }}
+    namespace: {{ .Release.Namespace }}
