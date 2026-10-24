@@ -1,0 +1,41 @@
+# Maintenance Manager for Envoy®. One install per cluster: the CRDs and the
+# ClusterRole are cluster-scoped. Reference: docs/HANDOVER.md §11.
+
+image:
+  repository: ghcr.io/prosperity-solutions/maintenance-manager
+  # Defaults to "v" + the chart's appVersion.
+  tag: ""
+  # The release pipeline pins the published digest here; it wins over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# One per zone in multi-AZ clusters.
+replicaCount: 2
+
+# Routes are armed this long before a dated phase starts, so the Envoy
+# listener drain happens well before maintenance does.
+armingLeadTime: 15m
+
+goMemLimit: 400MiB
+
+editor:
+  # Required, or existingSecret. Whoever holds it can serve any HTML on every
+  # gated app's origin: treat it like a deploy credential.
+  password: ""
+  # A Secret in the release namespace with the key `editor-password` (not
+  # named maintenance-manager: the chart owns that one). After changing a
+  # password or token, restart the pods:
+  #   kubectl -n <namespace> rollout restart deploy/maintenance-manager
+  existingSecret: ""
+
+bypass:
+  # Requests carrying X-Maintenance-Manager-Bypass: <token> skip maintenance.
+  # Empty disables the bypass; otherwise at least 16 characters.
+  token: ""
+
+resources:
+  requests:
+    cpu: 100m # about peak rps × 50µs
+    memory: 128Mi
+  limits:
+    memory: 512Mi # no CPU limit, to avoid throttling

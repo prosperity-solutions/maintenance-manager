@@ -151,10 +151,59 @@ jobs:
           go -C tools run ./depage
       - name: Licences
         run: GOROOT=$(go env GOROOT) scripts/dev/t go-licenses check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC,MPL-2.0
+      - name: Chart (helm lint, helm template, kubeconform)
+        run: |
+          # A source checkout has appVersion 0.0.0 and no published image, so the
+          # chart insists on an explicit tag; a released chart renders without one.
+          scripts/dev/t helm lint chart --set editor.password=x --set image.tag=v0.0.0-lint
+          scripts/dev/t helm template mm chart --namespace mm --set editor.password=x --set image.tag=v0.0.0-lint > "$RUNNER_TEMP/chart.yaml"
+          # The default schema repo has no schema for the CustomResourceDefinition
+          # kind itself; a real API server validates our CRDs in e2e and envtest.
+          scripts/dev/t kubeconform -strict -summary -kubernetes-version 1.34.12 \
+            -schema-location default -skip CustomResourceDefinition "$RUNNER_TEMP/chart.yaml"
+          # The install must fail without an editor password.
+          if out=$(scripts/dev/t helm template mm chart --set image.tag=v0.0.0-lint 2>&1); then
+            echo "helm template without editor.password must fail."
+            exit 1
+          fi
+          printf '%s\n' "$out" | grep -q "editor.password or editor.existingSecret is required" ||
+            { printf '%s\n' "$out"; echo "It failed, but not for the missing password."; exit 1; }
+      - name: Rehearse the release path (pin digest, package, render the .tgz)
+        run: |
+          # The same steps publish runs after a merge, with a dummy digest, so a
+          # change that breaks them fails here instead of on main.
+          cp -R chart "$RUNNER_TEMP/chart"
+          d=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          sed -i "s/^  digest: \"\"$/  digest: \"$d\"/" "$RUNNER_TEMP/chart/values.yaml"
+          [ "$(grep -c "^  digest: \"$d\"$" "$RUNNER_TEMP/chart/values.yaml")" = 1 ] || { echo "chart/values.yaml must have exactly one '  digest: \"\"' line (publish pins it)."; exit 1; }
+          scripts/dev/t helm package "$RUNNER_TEMP/chart" --version 0.0.1 --app-version 0.0.1 -d "$RUNNER_TEMP/dist"
+          scripts/dev/t helm template mm "$RUNNER_TEMP/dist/maintenance-manager-0.0.1.tgz" --set editor.password=x | grep -q "image: \"ghcr.io/prosperity-solutions/maintenance-manager@$d\""
+          GOROOT=$(go env GOROOT) scripts/dev/t go-licenses save ./cmd/maintenance-manager --save_path="$RUNNER_TEMP/licenses"
+          # ko: .ko.yaml template, base image pull, both platforms; nothing is pushed.
+          VERSION=0.0.1 KO_DOCKER_REPO=ko.local scripts/dev/t ko build --push=false --platform=linux/amd64,linux/arm64 ./cmd/maintenance-manager
+
+  test:
+    name: test
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+            tools/actionlint/go.sum
+      - name: go test -race
+        run: go test -race ./...
 
   all-green:
     name: all-green
-    needs: [gate, commits, ship, lint]
+    needs: [gate, commits, ship, lint, test]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 2

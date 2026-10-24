@@ -152,8 +152,13 @@ func readPins(path string) ([]pin, error) {
 		replaced[r.Old.Path] = r
 	}
 	var pins []pin
-	if f.Toolchain != nil {
+	// The toolchain line, or the go line when tidy dropped an equal toolchain
+	// line: setup-go installs the go line's version.
+	switch {
+	case f.Toolchain != nil:
 		pins = append(pins, pin{Path: "toolchain", Version: f.Toolchain.Name, From: path})
+	case f.Go != nil && strings.Count(f.Go.Version, ".") == 2:
+		pins = append(pins, pin{Path: "toolchain", Version: "go" + f.Go.Version, From: path})
 	}
 	for _, r := range f.Require {
 		p := pin{Path: r.Mod.Path, Version: r.Mod.Version, From: path}

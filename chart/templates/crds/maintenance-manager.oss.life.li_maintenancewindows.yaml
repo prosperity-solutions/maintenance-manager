@@ -1,0 +1,122 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/part-of: maintenance-manager
+  name: maintenancewindows.maintenance-manager.oss.life.li
+spec:
+  group: maintenance-manager.oss.life.li
+  names:
+    categories:
+    - maintenance-manager
+    kind: MaintenanceWindow
+    listKind: MaintenanceWindowList
+    plural: maintenancewindows
+    shortNames:
+    - mmw
+    singular: maintenancewindow
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.enabled
+      name: Enabled
+      type: boolean
+    - jsonPath: .spec.endsAt
+      name: Ends
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          MaintenanceWindow says when maintenance happens and what each phase does to
+          which services.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              MaintenanceWindowSpec is a sequence of phases. See docs/HANDOVER.md §4.4
+              for the phase rules.
+            properties:
+              enabled:
+                description: |-
+                  Enabled starts the window (and a phase 0 without startsAt); false stops
+                  it immediately.
+                type: boolean
+              endsAt:
+                description: EndsAt ends the window. Without it the window runs until
+                  disabled.
+                format: date-time
+                type: string
+              phases:
+                items:
+                  description: Phase is one step of a window.
+                  properties:
+                    action:
+                      description: Action is banner, interstitial or block.
+                      type: string
+                    name:
+                      type: string
+                    routings:
+                      items:
+                        description: Routing applies one page to a set of services.
+                        properties:
+                          page:
+                            description: Page is a MaintenancePage name. Missing or
+                              empty means the default page.
+                            type: string
+                          services:
+                            description: Services are MaintenanceService names.
+                            items:
+                              type: string
+                            maxItems: 64
+                            type: array
+                        required:
+                        - services
+                        type: object
+                      maxItems: 32
+                      type: array
+                    startsAt:
+                      description: |-
+                        StartsAt is when the phase begins. Empty on phase 0 means "when the
+                        window is enabled"; empty on a later phase means pending.
+                      format: date-time
+                      type: string
+                  required:
+                  - action
+                  - name
+                  - routings
+                  type: object
+                maxItems: 16
+                type: array
+            required:
+            - phases
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

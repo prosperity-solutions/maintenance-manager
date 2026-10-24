@@ -1,0 +1,15 @@
+{{- /* With one replica, minAvailable: 1 would block every node drain. */ -}}
+{{- if gt (int .Values.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mm.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "mm.selectorLabels" . | nindent 6 }}
+{{- end }}

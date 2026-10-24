@@ -72,6 +72,7 @@ func TestRun(t *testing.T) {
 		{name: "allow line without reason is an error", mod: gomod, allow: "example.com/young@v1.2.0\n", strict: true, want: 1, output: "want `<path>@<version>"},
 		{name: "unresolvable fails on PRs", mod: strings.Replace(gomod, "v1.0.0", "v1.9.9", 1), allow: "example.com/young@v1.2.0 # x\n", strict: true, want: 1, output: "cannot resolve"},
 		{name: "unresolvable warns on main", mod: strings.Replace(gomod, "v1.0.0", "v1.9.9", 1), allow: "example.com/young@v1.2.0 # x\n", strict: false, want: 0, output: "warning only on main"},
+		{name: "young go line fails without a toolchain line", mod: strings.Replace(strings.Replace(gomod, "toolchain go1.26.9\n", "", 1), "go 1.26.7", "go 1.26.10", 1), allow: "example.com/young@v1.2.0 # x\n", strict: true, want: 1, output: "toolchain@go1.26.10"},
 		{name: "young toolchain fails", mod: strings.Replace(gomod, "go1.26.9", "go1.26.10", 1), allow: "example.com/young@v1.2.0 # x\n", strict: true, want: 1, output: "toolchain@go1.26.10"},
 	}
 	for _, tc := range cases {
@@ -109,7 +110,9 @@ func TestLocalReplaceIsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pins) != 0 {
-		t.Fatalf("local replacement should not be checked: %v", pins)
+	for _, p := range pins {
+		if p.Path == "example.com/x" {
+			t.Fatalf("local replacement should not be checked: %v", pins)
+		}
 	}
 }

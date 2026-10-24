@@ -1,0 +1,14 @@
+Maintenance Manager for Envoy® {{ .Chart.AppVersion }} is installed in {{ .Release.Namespace }}.
+
+This release is the walking skeleton: the resources, the chart and an authz
+server that lets every request pass. The editor (port 8080) and maintenance
+windows that actually gate traffic arrive in later releases; see
+https://github.com/prosperity-solutions/maintenance-manager/releases.
+
+Nothing reaches your apps until a MaintenanceWindow is armed. At rest, Envoy
+never calls maintenance-manager, and if it is ever down, traffic flows to your
+apps as if it was not there (fail-open).
+
+One install per cluster: the CRDs and the ClusterRole are cluster-scoped, so a
+second release fails Helm's ownership check. Uninstalling keeps your windows,
+pages and services (the CRDs carry helm.sh/resource-policy: keep).

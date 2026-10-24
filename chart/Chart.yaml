@@ -1,0 +1,15 @@
+apiVersion: v2
+name: maintenance-manager
+description: Maintenance pages, interstitials and banners for apps behind Envoy Gateway, without touching their routes.
+type: application
+# Both are set at release time: helm package --version X.Y.Z --app-version X.Y.Z
+version: 0.0.0
+appVersion: "0.0.0"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/prosperity-solutions/maintenance-manager
+sources:
+  - https://github.com/prosperity-solutions/maintenance-manager
+keywords: [envoy-gateway, gateway-api, maintenance, ext-authz]
+annotations:
+  licenses: MIT
+  artifacthub.io/license: MIT
