@@ -149,6 +149,7 @@ spec:
   - It renders as `<time datetime="…Z">22:30 UTC</time>`.
   - The built-in default template includes a ~5-line inline script that converts `<time>` elements to the visitor's local timezone.
 - **Validation (Go):** `fallbackLocale` must exist, the template must parse and execute, and the rendered body must be ≤ 64 KiB. An invalid page is replaced by the built-in default page.
+- **As built (after M4):** templates are limited to a safe subset, checked on the parse tree before anything runs: text, `{{.Field}}`, `if`/`else`, `with`, and the functions `eq ne lt le gt ge and or not len`. Rejected: `range` (since Go 1.24 it iterates over an integer, so `{{range 9223372036854775807}}{{end}}` runs for ever), `template`/`define`/`block` (recursion), variables, and every other function (nested `js`, `printf` widths or a doubled variable build gigabytes in memory without writing a byte). The check is static because the parse-time run uses sample data and misses branches for other locales. Every replica parses every page when it rebuilds its snapshot, so one such page froze all changes, including disabling a window. Rendering also stops writing at 64 KiB.
 
 ### 4.3 `MaintenanceWindow` — "when, and what happens"
 

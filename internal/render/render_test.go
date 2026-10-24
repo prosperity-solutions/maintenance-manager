@@ -2,6 +2,8 @@ package render
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +131,80 @@ func TestDefaultPage(t *testing.T) {
 	}
 	if strings.Contains(out, "<time datetime") {
 		t.Error("time element with unknown until")
+	}
+}
+
+func TestParseRejectsLoops(t *testing.T) {
+	// Each of these would spin or recurse with no output (or never return).
+	for _, src := range []string{
+		`{{range 9223372036854775807}}{{end}}`,
+		`{{if .Title}}{{range 3}}x{{end}}{{end}}`,
+		`{{with .Title}}{{else}}{{range 3}}{{end}}{{end}}`,
+		`{{define "a"}}{{template "a"}}{{end}}{{template "a"}}`,
+		`{{block "b" .}}x{{end}}`,
+		`{{template "page"}}`,
+		`{{$a := .Title}}{{$a}}`,
+		`{{.Title | printf "%900000d"}}`,
+		`{{if js (js "\\")}}x{{end}}`,
+		`{{len (printf "%900000d" 1)}}`,
+		`{{if .Title}}{{else if .Message}}{{range 3}}{{end}}{{end}}`,
+		`{{with .Title}}{{else with .Message}}{{index . 0}}{{end}}`,
+		`{{html .Title}}`,
+		`{{urlquery .Title}}`,
+		`{{$}}`,
+		`{{(printf "x").Y}}`,
+	} {
+		done := make(chan error, 1)
+		go func() { _, err := Parse(src); done <- err }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("Parse(%q) must fail", src)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Parse(%q) hung", src)
+		}
+	}
+}
+
+func TestParseAllowsTheSafeSubset(t *testing.T) {
+	src := `<html lang="{{.Locale}}">{{if and .Title (not .Interstitial)}}<h1>{{.Title}}</h1>{{else if eq .Locale "de"}}x{{end}}` +
+		`{{with .Message}}<p>{{.}}</p>{{end}}{{if gt (len .Message) 3}}long{{end}}{{.Until}}</html>`
+	if _, err := Parse(src); err != nil {
+		t.Fatalf("the safe subset must parse: %v", err)
+	}
+}
+
+func TestRenderStopsAtTheCap(t *testing.T) {
+	// Many small writes: the capped writer stops before the whole page exists.
+	p, err := Parse(`{{.Message}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w cappedBuffer
+	w.max = 10
+	if _, err := w.Write([]byte("0123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("x")); !errors.Is(err, errTooLarge) || w.Len() != 10 {
+		t.Fatalf("the 11th byte must be refused, got %v with %d bytes", err, w.Len())
+	}
+	if _, err := p.Render(Input{Message: strings.Repeat("x", MaxBody+1)}); err == nil || !strings.Contains(err.Error(), "larger than the limit") {
+		t.Fatalf("want the size error, got %v", err)
+	}
+}
+
+func TestViewHasNoMethods(t *testing.T) {
+	v := reflect.TypeOf(view{})
+	for _, typ := range []reflect.Type{v, reflect.PointerTo(v)} {
+		if typ.NumMethod() != 0 {
+			t.Fatalf("%s has methods: pages could call them", typ)
+		}
+	}
+	for i := range v.NumField() {
+		f := v.Field(i).Type
+		if f.NumMethod() != 0 || reflect.PointerTo(f).NumMethod() != 0 {
+			t.Fatalf("view.%s (%s) has methods: pages could call them", v.Field(i).Name, f)
+		}
 	}
 }
