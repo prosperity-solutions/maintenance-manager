@@ -214,6 +214,9 @@ func setup(ctx context.Context, eg, digest, kubeFile string) error {
 			"--kubeconfig", kubeFile, "-n", mmNamespace, "--create-namespace",
 			"--set", "editor.password="+editorPassword, "--set", "bypass.token="+bypassToken, "--set", "image.repository=kind.local/maintenance-manager",
 			"--set", "image.tag="+tag, "--set", "image.digest=", "--set", "image.pullPolicy=IfNotPresent",
+			// The NetworkPolicy on: authz must still answer Envoy, and E11 reaches
+			// the editor through Envoy.
+			"--set", "networkPolicy.enabled=true", "--set", "networkPolicy.editorFrom={envoy-gateway-system}",
 			// A reused cluster (MM_E2E_KEEP) may carry fields earlier tests patched.
 			"--force-conflicts",
 			"--wait", "--timeout", "3m")

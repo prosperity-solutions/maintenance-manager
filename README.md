@@ -15,9 +15,80 @@ interstitials and banners** on any Kubernetes® cluster running **Envoy Gateway
   SecurityPolicies instead of replacing them.
 - **No database.** State lives in three custom resources.
 
-> 🚧 Under construction. The first release, install-by-digest and verify
-> commands land here as it ships. The full design is in
-> [docs/HANDOVER.md](docs/HANDOVER.md).
+It needs **Envoy Gateway ≥ 1.8** (tested on v1.8.3 and v1.9.1) with the Gateway
+API it installs, and one install per cluster.
+
+## How it works
+
+You describe three things as custom resources, usually in the editor:
+
+- a **MaintenanceService**: which HTTPRoutes make up an app (a label selector);
+- a **MaintenancePage**: what users see (an HTML template and texts per language);
+- a **MaintenanceWindow**: when, and what happens, as phases: `banner` (pass
+  through with a header the app can show), `interstitial` (a page once per
+  session), `block` (503 with your page, or `application/problem+json` for
+  APIs, plus `Retry-After`).
+
+Fifteen minutes before a window starts, maintenance-manager attaches one
+SecurityPolicy per app namespace to the matching routes, so Envoy asks it about
+every request; after the window it removes it. Its policy merges with
+Gateway-level policies your platform already has, and it steps aside (reported
+as a conflict) where another auth policy targets the route.
+
+## Install
+
+**By digest**, after verifying it was built here. Every
+[release](https://github.com/prosperity-solutions/maintenance-manager/releases)
+lists its digests with both commands ready to paste:
+
+```sh
+gh attestation verify oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sha256:<chart digest> \
+  --repo prosperity-solutions/maintenance-manager \
+  --signer-workflow prosperity-solutions/maintenance-manager/.github/workflows/ci.yml \
+  --source-ref refs/heads/main --deny-self-hosted-runners
+
+helm install mm oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sha256:<chart digest> \
+  -n maintenance-manager --create-namespace --set editor.password=<at least 12 characters>
+```
+
+The chart pins the image by digest; the same `gh attestation verify` with
+`oci://ghcr.io/prosperity-solutions/maintenance-manager@sha256:<image digest>`
+checks the image. More in [docs/security.md](docs/security.md).
+
+**On Qovery:**
+
+1. Organization settings → Helm repositories: add
+   `oci://ghcr.io/prosperity-solutions/charts` (OCI, public).
+2. Add a Helm service: chart `maintenance-manager`, the release's version,
+   **Allow cluster-wide resources** on, and `editor.password` from a Qovery
+   secret.
+3. Deploy.
+
+**Uninstall:** `helm uninstall mm -n maintenance-manager`. A pre-delete hook
+removes every SecurityPolicy and ReferenceGrant it created; your windows, pages
+and services stay (the CRDs are kept). If the hook fails, run the uninstall
+again; `--no-hooks` leaves the policies behind.
+
+### The 60-second drain
+
+Envoy Gateway adds one filter per SecurityPolicy to the listener, so attaching
+or removing one changes the listener, and Envoy drains it: open connections
+close gracefully over 60 seconds and reconnect. For plain HTTP that is the whole
+port; for HTTPS it is that host's TLS chain. Normal requests do not notice;
+WebSockets and server-sent events reconnect. This happens when a window arms
+(15 minutes before it starts, so not during maintenance) and when it disarms.
+Pick quiet moments for the first install and test.
+
+### Letting your team through
+
+Set `bypass.token` (at least 16 characters) and send
+`X-Maintenance-Manager-Bypass: <token>` with a browser header extension: your
+requests pass as if no window were active. The header is stripped before your
+app on armed routes. At rest Envoy never calls maintenance-manager, so it
+passes through untouched: send it only during maintenance. There is no bypass
+link and no bypass cookie, so the token never lands in URLs or logs. After
+changing it, restart the pods (`kubectl -n maintenance-manager rollout restart
+deploy/maintenance-manager`).
 
 ## The editor
 
@@ -91,6 +162,36 @@ same MaintenanceService, or the banner never shows for the others. A dismissed
 banner comes back when the window's end time changes. It works under a strict
 CSP (`script-src 'self'`, Trusted Types): its styles are a constructed
 stylesheet, not inline CSS.
+
+## Operating it
+
+- **Health:** `:8081/healthz`, and `:8081/readyz`, which turns ready once the
+  caches have synced and the first snapshot is built.
+- **Metrics** on `:8081/metrics` (Prometheus), all prefixed
+  `maintenance_manager_`, with no per-host, per-route or per-window labels:
+  `check_total{result}` (pass, banner, interstitial_page, interstitial_pass,
+  block_html, block_problem, status, bypass, not_ready),
+  `snapshot_builds_total`, `snapshot_build_seconds`, `snapshot_routes`,
+  `snapshot_timestamp_seconds`, `controller_leader`,
+  `controller_reconciles_total{result}`, `controller_writes_total`,
+  `controller_armed_routes`, `controller_conflicts`, `editor_writes_total{verb}`
+  and `editor_logins_total{result}`. Plus the Go runtime and controller-runtime
+  metrics.
+- **Profiling:** `--set pprof.addr=127.0.0.1:6060` serves `net/http/pprof`;
+  reach it with `kubectl port-forward`. Off by default.
+- **NetworkPolicy:** `networkPolicy.enabled=true` lets only Envoy
+  (`networkPolicy.envoyNamespaces`) reach authz on port 9001, and the editor and
+  metrics only from the namespaces you list (`editorFrom`, `metricsFrom`).
+  `kubectl port-forward` and kubelet probes still work.
+- **Failure:** if maintenance-manager is down, slow or misconfigured, Envoy
+  lets traffic through (fail-open). Disabling a window always works, from the
+  editor or with `kubectl -n maintenance-manager patch mmw <window> --type=merge
+  -p '{"spec":{"enabled":false}}'`.
+- **Shutdown:** on SIGTERM a pod fails `/readyz`, keeps answering for 10 s,
+  then stops gRPC gracefully (5 s cap), within its 30 s grace period.
+
+How it is tested: [docs/testing.md](docs/testing.md). How it is released:
+[docs/release.md](docs/release.md).
 
 ## Licence
 

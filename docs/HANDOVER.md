@@ -516,7 +516,7 @@ resources:
   - `get/list/watch` on httproutes and gateways, plus listenersets in both `gateway.networking.k8s.io` and `gateway.networking.x-k8s.io` (xlistenersets)
   - `get/list/watch/create` on securitypolicies, and `update/patch/delete` only on our name (`resourceNames: [mm-<hash8(release-ns)>]`, rendered with `sha256sum | trunc 8`): a compromised pod cannot rewrite or delete a platform's JWT/OIDC/extAuth policy
   - `get/list/watch` on namespaces (`targetSelectors.namespaces.from: Selector` is evaluated against namespace labels, §5.3)
-  - `create/patch` on events
+  - no events: nothing records Kubernetes Events (conflicts are logged, counted in `maintenance_manager_controller_conflicts` and shown in the editor), so the rule was dropped in M7
 - **Release namespace:**
   - all verbs on our 3 CRDs
   - `get/list/watch/create/update/patch/delete` on referencegrants
@@ -534,6 +534,14 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
   3. `GracefulStop` with a 5 s cap
 
   `terminationGracePeriodSeconds: 30`.
+
+**As built (M7):**
+- **Metrics** (`internal/metrics`, on controller-runtime's registry, so `:8081/metrics` also has the Go runtime and controller-runtime metrics): `check_total{result}` with pre-resolved handles (0 allocations, the bench gate still at 0), snapshot builds, duration, routes and timestamp, controller leader, reconciles, writes, armed routes and conflicts, editor writes and logins. No host, route or window labels.
+- **pprof:** `--pprof-addr` / `pprof.addr`, off by default; its runnable logs and waits on a bind failure rather than stopping the manager.
+- **NetworkPolicy** (`networkPolicy.enabled`, off by default): ingress to 9001 only from `envoyNamespaces`, to 8080 and 8081 only from `editorFrom` / `metricsFrom`; egress unrestricted. The e2e install turns it on.
+- **Release notes** carry the image and chart digests with the install and verify commands (validated `sha256:` digests, written from job outputs through env, never interpolated).
+- **Events RBAC dropped** (see the RBAC list above).
+- **§24's `helm template --set editor.password=x`** became `<12+ characters>`: the chart has refused shorter passwords since M5.
 
 ## 12. Failure modes
 
@@ -724,7 +732,7 @@ Serialized by the workflow-level `main` concurrency group (§15). Cancelled *pen
 | `publish` | `contents: read`, `packages: write` | 1. `harden-runner` (`egress-policy: block`, allow-list §17.2) <br> 2. checkout (`persist-credentials: false`, `fetch-depth: 0`) <br> 3. setup-go (`cache: false`) <br> 4. compute the version <br> 5. **fail if a published GitHub release `vX.Y.Z` already exists** <br> 6. `go-licenses save` → `cmd/maintenance-manager/kodata/licenses/` <br> 7. `KO_DOCKER_REPO=ghcr.io/prosperity-solutions/maintenance-manager ko build --bare --platform=linux/amd64,linux/arm64 --tags=vX.Y.Z --image-label org.opencontainers.image.source=https://github.com/prosperity-solutions/maintenance-manager --image-annotation org.opencontainers.image.source=…` (ko attaches its SPDX SBOM) (ko authenticates to ghcr.io with `GITHUB_TOKEN` from `env:`) <br> 8. write the digest into `chart/values.yaml` (`image.digest`) in the workspace (`helm package` has no `--set`), then `helm package chart --version X.Y.Z --app-version X.Y.Z` <br> 9. `helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin`, then `helm push oci://ghcr.io/prosperity-solutions/charts` <br> **Outputs:** `version`, `released`, `image_digest`, `chart_digest` |
 | `attest` | `id-token: write`, `attestations: write` | **No checkout, no `run:` steps, first-party actions only.** Two `actions/attest` steps (no `sbom-path` → SLSA build provenance), each with `subject-name` and `subject-digest`: one for the image, one for the chart. No `push-to-registry`: attestations live in GitHub's attestation store. |
 | `release` | `contents: write`, `packages: read` | 1. harden-runner <br> 2. checkout at `${{ github.sha }}` (`persist-credentials: false`) <br> 3. setup-go (`cache: false`) <br> 4. `helm registry login ghcr.io` with `${{ github.token }}` (packages may still be private) <br> 5. `helm pull oci://… --version X.Y.Z` and confirm the printed digest equals `${chart_digest}` (Helm names a `tag@digest` pull `<chart>@sha256-….tgz`, not `<chart>-X.Y.Z.tgz`) <br> 6. write `SHA256SUMS` over the chart `.tgz` and `client/maintenance-manager.js` (unconditionally since M6: a moved file fails the release instead of silently dropping the asset) <br> 7. `go-licenses report ./... > THIRD_PARTY_LICENSES.csv` (it writes CSV to stdout) <br> 8. fail if tag `vX.Y.Z` already exists and doesn't point at `${{ github.sha }}`. If a draft `vX.Y.Z` already exists (a re-run or a retried version), reuse it, but first `gh release edit vX.Y.Z --target ${{ github.sha }}`. Otherwise `gh release create vX.Y.Z --draft --target ${{ github.sha }} --notes-file …` (notes generated from commit subjects into a file, never interpolated into `run:`) <br> 9. `gh release upload --clobber` the assets <br> 10. verify every asset by name and size <br> 11. `gh release edit --draft=false`, which creates the tag and locks the release |
-| `verify` | `contents: read`, `packages: read`, `attestations: read` | 1. harden-runner <br> 2. checkout + setup-go (`cache: false`), for the `go tool` crane/helm <br> 3. `crane auth login` / `helm registry login` to ghcr.io with `${{ github.token }}`. Anonymous pulls are only checked at handback (§21.4) <br> 4. `gh attestation verify oci://ghcr.io/prosperity-solutions/maintenance-manager@${image_digest} --repo prosperity-solutions/maintenance-manager --signer-workflow prosperity-solutions/maintenance-manager/.github/workflows/ci.yml --source-ref refs/heads/main --deny-self-hosted-runners`, and the same for the chart <br> 5. `crane manifest` shows both platforms <br> 6. `helm template --set editor.password=x` of the pulled chart renders |
+| `verify` | `contents: read`, `packages: read`, `attestations: read` | 1. harden-runner <br> 2. checkout + setup-go (`cache: false`), for the `go tool` crane/helm <br> 3. `crane auth login` / `helm registry login` to ghcr.io with `${{ github.token }}`. Anonymous pulls are only checked at handback (§21.4) <br> 4. `gh attestation verify oci://ghcr.io/prosperity-solutions/maintenance-manager@${image_digest} --repo prosperity-solutions/maintenance-manager --signer-workflow prosperity-solutions/maintenance-manager/.github/workflows/ci.yml --source-ref refs/heads/main --deny-self-hosted-runners`, and the same for the chart <br> 5. `crane manifest` shows both platforms <br> 6. `helm template --set editor.password=<12+ characters>` of the pulled chart renders |
 
 - **Hand-offs:** digests and the version pass between jobs **only as `needs.*.outputs`**. No artifacts are used at all.
 - **No secrets.** Only `GITHUB_TOKEN` and GitHub OIDC.
@@ -735,7 +743,7 @@ Serialized by the workflow-level `main` concurrency group (§15). Cancelled *pen
   - A release can't be created or published on a commit that is behind `main` when a later merge changed `.github/workflows/`: `GITHUB_TOKEN` lacks Workflows permission and gets a 404. In that case, don't re-run; let the next releasable merge carry the version.
 
 ### 16.3 Chart validation
-`helm lint --set editor.password=x --set image.tag=…`, then `helm template --set editor.password=x --set image.tag=… … | kubeconform -strict -kubernetes-version <newest version published in the default schema repo> -schema-location default -skip CustomResourceDefinition`. The chart renders no instances of our own CRDs, so no custom schemas are needed. The default schema repo has no schema for the `CustomResourceDefinition` kind itself (verified at M1: 404 for `customresourcedefinition-apiextensions-v1.json` in v1.34.12), so that kind is skipped; a real API server validates our CRDs in e2e (kind) and envtest. `values.schema.json` validates the values themselves, and `lint` also asserts that `helm template` fails without an editor password, for that reason. A source checkout has `appVersion: 0.0.0` and no published image, so the chart refuses to render it without `image.tag` or `image.digest`; a released chart renders with only the password. `lint` also **rehearses the publish steps** on every PR: the digest pin in a copy of `chart/values.yaml`, `helm package`, a render of the `.tgz`, `go-licenses save`, and `ko build --push=false` for both platforms.
+`helm lint --set editor.password=<12+ characters> --set image.tag=…`, then `helm template --set editor.password=<12+ characters> --set image.tag=… … | kubeconform -strict -kubernetes-version <newest version published in the default schema repo> -schema-location default -skip CustomResourceDefinition`. The chart renders no instances of our own CRDs, so no custom schemas are needed. The default schema repo has no schema for the `CustomResourceDefinition` kind itself (verified at M1: 404 for `customresourcedefinition-apiextensions-v1.json` in v1.34.12), so that kind is skipped; a real API server validates our CRDs in e2e (kind) and envtest. `values.schema.json` validates the values themselves, and `lint` also asserts that `helm template` fails without an editor password, for that reason. A source checkout has `appVersion: 0.0.0` and no published image, so the chart refuses to render it without `image.tag` or `image.digest`; a released chart renders with only the password. `lint` also **rehearses the publish steps** on every PR: the digest pin in a copy of `chart/values.yaml`, `helm package`, a render of the `.tgz`, `go-licenses save`, and `ko build --push=false` for both platforms.
 
 ## 17. Supply chain & malicious-PR hardening
 
@@ -1147,7 +1155,7 @@ The last chat message is the issue link plus a one-line summary.
 - `e2e` is green on EG v1.8.3 and v1.9.1, covering E1–E11. `test` is green (race, bench gate, envtest, fuzz seeds, node).
 - `lint` is green: zizmor at its default severity with zero findings, `test/workflows`, depage, licences, govulncheck.
 - The owner script's settings and both rulesets are verified via `gh api`.
-- Uninstall leaves zero SPs and grants (E9). `helm template --set editor.password=x` of the released chart renders without a cluster.
+- Uninstall leaves zero SPs and grants (E9). `helm template --set editor.password=<12+ characters>` of the released chart renders without a cluster.
 - The run-report issue is complete.
 
 ## 25. Out of scope for v1
@@ -1184,7 +1192,7 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 | D10 | Default page look (built-in template) | Your call: plain, accessible, inline CSS, dark-mode aware, < 8 KB |
 | D11 | README wording, pitch and examples | Your call, following the voice rules in §20.2 |
 | D12 | golangci-lint linter set | Start from the outfit config, adapted; enable `gosec`, `errorlint`, `bodyclose`, `noctx` |
-| D13 | Metric bucket boundaries and log field names | Your call, consistent with §14's metric names |
+| D13 | Metric bucket boundaries and log field names | Your call, consistent with §14's metric names. **Settled (M7):** `internal/metrics`, all `maintenance_manager_*`, labels only `result`/`verb` (fixed sets); `snapshot_build_seconds` buckets 1 ms–5 s; logs use `err`, `client`, `kind`, `name`, `namespace`, `route`. List in the README |
 | D14 | Whether `go-licenses` works on the pinned toolchain | Try it; if not, switch the check to `lichen` per §14 |
 | D15 | Any API field name in this spec that doesn't exist in EG 1.8.3 | The 1.8.3 source wins; fix the spec |
 

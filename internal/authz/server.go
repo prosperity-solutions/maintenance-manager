@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/metrics"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -82,6 +83,7 @@ func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.Che
 	headers := http.GetHeaders()
 	tbl := s.tbl.Load()
 	if tbl == nil { // not ready: fail open, but never forward a bypass token
+		metrics.CheckNotReady.Inc()
 		if _, ok := headers[bypassHeader]; ok {
 			return okStripResponse, nil
 		}
@@ -98,10 +100,12 @@ func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.Che
 
 	key, found := routeKey(req)
 	if !found {
+		metrics.CheckPass.Inc()
 		return ok, nil
 	}
 	timeline := tbl.routes[key]
 	if timeline == nil {
+		metrics.CheckPass.Inc()
 		return ok, nil
 	}
 	now := s.now()
@@ -109,28 +113,40 @@ func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.Che
 
 	// "//__maintenance-manager/status" too, in case :path was not normalized.
 	if path == statusPath || (len(path) > len(statusPath) && strings.TrimLeft(path, "/") == statusPath[1:]) {
+		metrics.CheckStatus.Inc()
 		return statusFor(d, http.GetMethod(), query, headers["accept-language"], bypass), nil
 	}
-	if bypass || d == nil {
+	if bypass {
+		metrics.CheckBypass.Inc()
+		return ok, nil
+	}
+	if d == nil {
+		metrics.CheckPass.Inc()
 		return ok, nil
 	}
 
 	html := wantsHTML(http)
 	switch d.action {
 	case mmv1.ActionBanner:
+		metrics.CheckBanner.Inc()
 		return d.passFor(hasBypassHdr), nil
 	case mmv1.ActionInterstitial:
 		if !html || cookieValue(headers["cookie"], d.cookiePrefix) == d.phaseKey {
+			metrics.CheckInterstitialPass.Inc()
 			return d.passFor(hasBypassHdr), nil
 		}
+		metrics.CheckInterstitialPage.Inc()
 		return d.page[d.locales.Resolve("", headers["accept-language"])], nil
 	case mmv1.ActionBlock:
 		loc := d.locales.Resolve("", headers["accept-language"])
 		if html {
+			metrics.CheckBlockHTML.Inc()
 			return d.page[loc], nil
 		}
+		metrics.CheckBlockProblem.Inc()
 		return d.problem[loc], nil
 	}
+	metrics.CheckPass.Inc()
 	return ok, nil
 }
 

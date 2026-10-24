@@ -33,6 +33,23 @@
         "existingSecret": { "type": "string" }
       }
     },
+    "pprof": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr": { "type": "string", "pattern": "^([^\\s]*:[0-9]+)?$", "description": "host:port, or empty (off)." }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "envoyNamespaces": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "editorFrom": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "metricsFrom": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "bypass": {
       "type": "object",
       "additionalProperties": false,

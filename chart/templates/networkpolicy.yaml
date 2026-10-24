@@ -1,0 +1,51 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress to the maintenance-manager pods (docs/HANDOVER.md §11, M7): authz
+# (9001) only from the Envoy namespaces, the editor (8080) and metrics (8081)
+# only from the namespaces listed. The node a pod runs on is always allowed
+# (kubelet probes), and kubectl port-forward does not pass through
+# NetworkPolicies. Egress is not restricted (the API server).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mm.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mm.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mm.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 9001
+          protocol: TCP
+      from:
+        {{- range .Values.networkPolicy.envoyNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- with .Values.networkPolicy.editorFrom }}
+    - ports:
+        - port: 8080
+          protocol: TCP
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.metricsFrom }}
+    - ports:
+        - port: 8081
+          protocol: TCP
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}

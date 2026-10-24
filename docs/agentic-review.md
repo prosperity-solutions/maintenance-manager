@@ -152,7 +152,7 @@ go test -race ./...                       # or the subset covering touched packa
 go test -tags envtest ./internal/controller/...   # when the controller is touched
 scripts/dev/t actionlint                  # when .github/workflows/ is touched
 shellcheck -s sh scripts/dev/t scripts/dev/*.sh scripts/ci/*.sh   # when a script is touched
-scripts/dev/t helm lint chart --set editor.password=x   # when chart/ is touched
+scripts/dev/t helm lint chart --set editor.password=lint-password --set image.tag=v0   # when chart/ is touched
 git diff --stat <diff-target>
 git log --oneline -- <touched paths>
 ```

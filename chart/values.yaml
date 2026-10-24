@@ -18,6 +18,24 @@ armingLeadTime: 15m
 
 goMemLimit: 400MiB
 
+pprof:
+  # Serve net/http/pprof here, e.g. 127.0.0.1:6060, and reach it with
+  # kubectl port-forward. Empty: off.
+  addr: ""
+
+networkPolicy:
+  # Off by default. On, only Envoy reaches authz (9001), and the editor (8080)
+  # and metrics (8081) only from the namespaces listed below (none: no pod
+  # in the cluster; kubectl port-forward and kubelet probes still work).
+  enabled: false
+  # Namespaces whose pods are Envoy proxies (Envoy Gateway's own by default).
+  envoyNamespaces: [envoy-gateway-system]
+  # Namespaces allowed to reach the editor, e.g. the Envoy namespace when an
+  # HTTPRoute of your own points at it.
+  editorFrom: []
+  # Namespaces allowed to scrape /metrics, e.g. monitoring.
+  metricsFrom: []
+
 editor:
   # Required (at least 12 characters), or existingSecret. Whoever holds it can
   # serve any HTML on every gated app's origin: treat it like a deploy

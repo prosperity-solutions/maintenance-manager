@@ -502,6 +502,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.publish.outputs.version }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          CHART_DIGEST: ${{ needs.publish.outputs.chart_digest }}
         run: |
           tag="v$VERSION"
           # gh api prints the error body on stdout for a 404, so the exit code
@@ -514,6 +516,22 @@ jobs:
           fi
           last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
           git log --format='- %s' "${last:+$last..}HEAD" > "$RUNNER_TEMP/notes.md"
+          # Install and verify by digest, straight from the notes (§23).
+          for d in "$IMAGE_DIGEST" "$CHART_DIGEST"; do
+            printf '%s' "$d" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "Unexpected digest: $d"; exit 1; }
+          done
+          {
+            printf '\n## Install by digest\n\n```sh\n'
+            printf 'helm install mm oci://ghcr.io/%s/charts/maintenance-manager@%s \\\n' "${GITHUB_REPOSITORY_OWNER}" "$CHART_DIGEST"
+            printf '  -n maintenance-manager --create-namespace --set editor.password=<at least 12 characters>\n```\n\n'
+            printf '## Verify\n\n```sh\n'
+            for ref in "maintenance-manager@$IMAGE_DIGEST" "charts/maintenance-manager@$CHART_DIGEST"; do
+              printf 'gh attestation verify oci://ghcr.io/%s/%s \\\n' "${GITHUB_REPOSITORY_OWNER}" "$ref"
+              printf '  --repo %s \\\n  --signer-workflow %s/.github/workflows/ci.yml \\\n' "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY"
+              printf '  --source-ref refs/heads/main --deny-self-hosted-runners\n'
+            done
+            printf '```\n\nImage %s, chart %s.\n' "$IMAGE_DIGEST" "$CHART_DIGEST"
+          } >> "$RUNNER_TEMP/notes.md"
           draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)
           case $draft in
             none) gh release create "$tag" --draft --target "$GITHUB_SHA" --title "$tag" --notes-file "$RUNNER_TEMP/notes.md" ;;

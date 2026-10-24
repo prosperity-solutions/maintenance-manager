@@ -28,6 +28,7 @@ import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/metrics"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -128,6 +129,8 @@ func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) (g
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				c.Log.Info("leading: the controller arms and disarms routes")
+				metrics.Leader.Set(1)
+				defer metrics.Leader.Set(0)
 				// lead returns while still leading only when it gives up: stop
 				// renewing, so another replica can take over.
 				gaveUp = c.lead(ctx)
@@ -394,6 +397,18 @@ func (c *Controller) reconcileOnce(ctx context.Context, rec *Reconciler) (res Re
 	}()
 	res, err = rec.Reconcile(ctx)
 	c.logConflicts(res.Desired.Conflicts)
+	if err != nil {
+		metrics.ReconcileError.Inc()
+	} else {
+		metrics.ReconcileOK.Inc()
+	}
+	metrics.Writes.Add(float64(res.Writes))
+	armedNow := 0
+	for _, rs := range res.Desired.Routes {
+		armedNow += len(rs)
+	}
+	metrics.ArmedRoutes.Set(float64(armedNow))
+	metrics.Conflicts.Set(float64(len(res.Desired.Conflicts)))
 	if err == nil && res.Writes > 0 {
 		armed := 0
 		for _, rs := range res.Desired.Routes {

@@ -52,6 +52,19 @@ produce an attestation that passes this.
   and the client address. Behind `kubectl port-forward` the address is always
   `127.0.0.1`.
 
+## Running it
+
+- **NetworkPolicy:** `networkPolicy.enabled=true` lets only Envoy's namespaces
+  reach authz (9001); the editor (8080) and metrics (8081) are then reachable
+  only from the namespaces you list. Recommended where the CNI enforces it.
+- **pprof is off by default.** When on, bind it to `127.0.0.1` and use
+  `kubectl port-forward`: profiles reveal internals.
+- **Metrics carry no host, route or window names**, so scraping them leaks
+  nothing about which apps exist.
+- **RBAC is narrow:** SecurityPolicies may only be updated or deleted under our
+  own name, the uninstall hook has its own ServiceAccount, and the pods write no
+  Events.
+
 ## Walls (a hostile PR cannot remove them)
 
 | | threat | wall |
