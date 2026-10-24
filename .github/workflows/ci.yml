@@ -200,6 +200,10 @@ jobs:
             tools/actionlint/go.sum
       - name: go test -race
         run: go test -race ./...
+      - name: Check() benchmark gate (≤ 2 allocs/op, < 50 µs/op)
+        env:
+          MM_BENCH_GATE: "1"
+        run: go test -count=1 -run '^TestCheckBudget$' -v ./internal/authz
 
   e2e:
     name: e2e

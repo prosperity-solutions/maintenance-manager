@@ -32,11 +32,9 @@ func TestParseServe(t *testing.T) {
 	if cfg.Namespace != "mm" || cfg.ArmingLeadTime != 5*time.Minute || cfg.MetricsAddr != ":8081" {
 		t.Fatalf("unexpected config %+v", cfg)
 	}
-	if cfg, err := parseServe([]string{"--e2e-block-route=shop/web"}); err != nil || cfg.BlockRoute == nil || cfg.BlockRoute.Name != "web" {
-		t.Fatalf("--e2e-block-route: %+v, %v", cfg, err)
-	}
-	if _, err := parseServe([]string{"--e2e-block-route=web"}); err == nil {
-		t.Fatal("--e2e-block-route without a namespace must be an error")
+	t.Setenv("MM_BYPASS_TOKEN", "0123456789abcdef")
+	if cfg, err := parseServe(nil); err != nil || cfg.Bypass != "0123456789abcdef" {
+		t.Fatalf("bypass token from MM_BYPASS_TOKEN: %+v, %v", cfg, err)
 	}
 	if _, err := parseServe([]string{"--arming-lead-time=-1s"}); err == nil {
 		t.Fatal("negative lead time must be an error")
@@ -50,7 +48,7 @@ func TestReadiness(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("before sync: %d, want 503", rec.Code)
 	}
-	r.ok.Store(true)
+	r.loaded.Store(true)
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
@@ -73,5 +71,18 @@ func TestScheme(t *testing.T) {
 		if !found {
 			t.Fatalf("%s not registered", kind)
 		}
+	}
+}
+
+func TestReadinessStaysDownAfterShutdown(t *testing.T) {
+	// A rebuild that lands during the drain must not report ready again.
+	r := &readiness{}
+	r.loaded.Store(true)
+	r.shutting.Store(true)
+	r.loaded.Store(true) // the late snapshot
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("during shutdown: %d, want 503", rec.Code)
 	}
 }

@@ -78,6 +78,10 @@ spec:
                       description: Action is banner, interstitial or block.
                       type: string
                     name:
+                      description: |-
+                        Name is a DNS label (lowercase letters, digits, dashes); it appears in
+                        the X-Maintenance-Manager header.
+                      maxLength: 63
                       type: string
                     routings:
                       items:

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,6 +21,7 @@ import (
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 	"github.com/prosperity-solutions/maintenance-manager/internal/authz"
+	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
 // serveConfig is everything `serve` reads from flags and the environment.
@@ -28,30 +29,22 @@ type serveConfig struct {
 	Namespace      string        // release namespace (POD_NAMESPACE)
 	ArmingLeadTime time.Duration // how long before a phase the routes are armed
 	MetricsAddr    string
-	BlockRoute     *authz.RouteKey // test-only, see --e2e-block-route
+	Bypass         string // MM_BYPASS_TOKEN; empty disables the bypass
 }
 
 func parseServe(args []string) (serveConfig, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	cfg := serveConfig{Namespace: os.Getenv("POD_NAMESPACE")}
+	cfg := serveConfig{Namespace: os.Getenv("POD_NAMESPACE"), Bypass: os.Getenv("MM_BYPASS_TOKEN")}
 	fs.DurationVar(&cfg.ArmingLeadTime, "arming-lead-time", 15*time.Minute, "arm routes this long before a dated phase starts")
 	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", ":8081", "metrics and health address (/metrics, /healthz, /readyz)")
-	var block string
-	// Test-only (M2): blocks one route with the static page until windows
-	// exist. M3 removes it.
-	fs.StringVar(&block, "e2e-block-route", "", "test only: block `namespace/name` with the static page (removed in M3)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
-	if block != "" {
-		k, ok := authz.ParseRouteKey(block)
-		if !ok {
-			return cfg, fmt.Errorf("--e2e-block-route wants namespace/name, got %q", block)
-		}
-		cfg.BlockRoute = &k
-	}
 	if cfg.Namespace == "" {
 		return cfg, errors.New("POD_NAMESPACE is not set; the chart sets it from the downward API")
+	}
+	if cfg.Bypass != "" && len(cfg.Bypass) < 16 {
+		return cfg, errors.New("MM_BYPASS_TOKEN must be empty (bypass off) or at least 16 characters: the status endpoint would make a short token guessable")
 	}
 	if cfg.ArmingLeadTime < 0 {
 		return cfg, fmt.Errorf("--arming-lead-time must not be negative, got %s", cfg.ArmingLeadTime)
@@ -95,6 +88,8 @@ func serve(args []string, log *slog.Logger) int {
 			&mmv1.MaintenanceService{}: inNS,
 			&mmv1.MaintenancePage{}:    inNS,
 			&mmv1.MaintenanceWindow{}:  inNS,
+			// HTTPRoutes: cluster-wide, metadata only, stripped (§3).
+			snapshot.NewRouteMetadata(): {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}, Transform: snapshot.StripRoute},
 		}},
 		// The default :8080 would collide with the editor (§11).
 		Metrics: metricsserver.Options{
@@ -115,17 +110,28 @@ func serve(args []string, log *slog.Logger) int {
 		GracefulShutdownTimeout: ptrTo(25 * time.Second),
 	})
 	if err != nil {
+		if meta.IsNoMatchError(err) {
+			log.Error("serve: the cluster does not serve gateway.networking.k8s.io/v1 HTTPRoute. maintenance-manager needs Envoy Gateway >= 1.8, which installs the Gateway API; install it first", "err", err)
+			return 1
+		}
 		log.Error("serve: manager", "err", err)
 		return 1
 	}
 
-	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.ok.Store(false) }, BlockRoute: cfg.BlockRoute}
+	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.shutting.Store(true) }}
 	if err := mgr.Add(srv); err != nil {
 		log.Error("serve: add authz", "err", err)
 		return 1
 	}
-	if err := mgr.Add(&cacheWatcher{cache: mgr.GetCache(), ready: ready, log: log}); err != nil {
-		log.Error("serve: add readiness", "err", err)
+	builder := &snapshot.Builder{
+		Cache: mgr.GetCache(), Namespace: cfg.Namespace, Bypass: cfg.Bypass, Log: log,
+		OnSnapshot: func(snap *snapshot.Snapshot) {
+			srv.Update(snap)
+			ready.loaded.Store(true) // caches synced and the first snapshot exists (§3)
+		},
+	}
+	if err := mgr.Add(builder); err != nil {
+		log.Error("serve: add snapshot builder", "err", err)
 		return 1
 	}
 
@@ -137,44 +143,18 @@ func serve(args []string, log *slog.Logger) int {
 	return 0
 }
 
-// readiness answers /readyz: 200 once the caches have synced.
-type readiness struct{ ok atomic.Bool }
+// readiness answers /readyz: 200 once the caches have synced and the first
+// snapshot is loaded; 503 again when shutdown starts.
+// Two flags, each written by one side, so a rebuild that lands during the
+// shutdown drain cannot report ready again.
+type readiness struct{ loaded, shutting atomic.Bool }
 
 func (r *readiness) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	if !r.ok.Load() {
-		http.Error(w, "not ready: caches not synced", http.StatusServiceUnavailable)
+	if !r.loaded.Load() || r.shutting.Load() {
+		http.Error(w, "not ready: no snapshot yet, or shutting down", http.StatusServiceUnavailable)
 		return
 	}
 	_, _ = w.Write([]byte("ok\n"))
-}
-
-// cacheWatcher starts informers for our three resources and flips readiness
-// once they have synced. Every replica runs it.
-type cacheWatcher struct {
-	cache cache.Cache
-	ready *readiness
-	log   *slog.Logger
-}
-
-func (c *cacheWatcher) NeedLeaderElection() bool { return false }
-
-func (c *cacheWatcher) Start(ctx context.Context) error {
-	for _, obj := range []client.Object{&mmv1.MaintenanceService{}, &mmv1.MaintenancePage{}, &mmv1.MaintenanceWindow{}} {
-		if _, err := c.cache.GetInformer(ctx, obj); err != nil {
-			return fmt.Errorf("informer for %T: %w", obj, err)
-		}
-	}
-	if !c.cache.WaitForCacheSync(ctx) {
-		if ctx.Err() != nil {
-			return nil // shut down before the caches synced
-		}
-		return errors.New("caches did not sync")
-	}
-	c.ready.ok.Store(true)
-	c.log.Info("caches synced; ready")
-	<-ctx.Done()
-	c.ready.ok.Store(false)
-	return nil
 }
 
 func ptrTo[T any](v T) *T { return &v }

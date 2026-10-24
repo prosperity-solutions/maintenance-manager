@@ -94,13 +94,3 @@ func TestNeedLeaderElection(t *testing.T) {
 		t.Fatal("every replica must answer Check()")
 	}
 }
-
-// The hot path budget (§6): at most 2 allocations beyond proto decoding.
-func TestCheckAllocs(t *testing.T) {
-	s := &Server{}
-	req := &authv3.CheckRequest{}
-	ctx := t.Context()
-	if n := testing.AllocsPerRun(1000, func() { _, _ = s.Check(ctx, req) }); n > 2 {
-		t.Fatalf("Check allocates %.0f times per call; the budget is 2", n)
-	}
-}

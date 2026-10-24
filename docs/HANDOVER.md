@@ -91,6 +91,7 @@ client ─▶ Envoy ─(armed routes only)─ Check(route id via route metadata)
 
 1. **Snapshot builder** (all replicas):
    - Watches our three CRDs and HTTPRoutes. HTTPRoutes go through a cache transform that keeps only name, namespace, labels, generation and parentRefs, and drops `managedFields`, annotations and status.
+   - **As built (M3):** every replica watches HTTPRoutes **metadata-only** (`PartialObjectMetadata`, stripped of managedFields, annotations and owner references): the snapshot needs names and labels only, and a metadata watch carries no spec at all. M4 needs `parentRefs` for §5.3, and controller-runtime keys its caches by GVK (one cache per kind, not per object type), so M4 **replaces** this watch with one typed HTTPRoute watch whose transform keeps only metadata and `spec.parentRefs`; the snapshot and the controller then read the same cache. Gateway API v1 HTTPRoute must be served: without it `serve` exits with an error naming the fix (install Envoy Gateway ≥ 1.8, which ships the Gateway API).
    - Rebuilds with a **100 ms trailing debounce, max 1 s**. Status-only updates don't trigger a rebuild: the predicate is `predicate.Or(GenerationChanged, LabelChanged)`. Labels don't bump `generation`, and a route relabelled into a selector must be picked up.
    - Swaps an immutable snapshot atomically. The hot path reads only the snapshot.
 2. **Controller** (leader-elected via Lease):
@@ -110,7 +111,7 @@ All three are **namespaced**, live in the chart's release namespace, and are ser
 
 - Go types use kubebuilder markers.
 - `controller-gen` generates the CRDs into `chart/templates/crds/` with `+kubebuilder:metadata:annotations="helm.sh/resource-policy=keep"` and `+kubebuilder:metadata:labels="app.kubernetes.io/part-of=maintenance-manager"`. Upgrades apply schema changes, and uninstall never deletes user data.
-- **Schema markers do structural limits only:** `MaxLength`/`MaxItems`/`MaxProperties` cap `html` at 65536 chars, 32 locales, 16 phases, 32 routings per phase and 64 services per routing. One CEL rule rejects an empty `routeSelector`.
+- **Schema markers do structural limits only:** `MaxLength`/`MaxItems`/`MaxProperties` cap `html` at 65536 chars, 32 locales, 16 phases, 32 routings per phase and 64 services per routing; since M3 also a page title at 256 chars, a message at 4096 and a phase name at 63 (the name must also be a DNS label, checked in Go: it goes into the `X-Maintenance-Manager` header). One CEL rule rejects an empty `routeSelector`.
 - Everything else is validated in Go, by both the editor and the snapshot builder.
 
 ### 4.1 `MaintenanceService` — "which routes"
@@ -190,6 +191,7 @@ spec:
 9. **Validation:**
    - A service may appear at most once per phase, across all of that phase's routings.
    - A routing whose page is missing uses the default page, and a missing service is skipped. The editor shows both as warnings.
+   - Two *different* services in different routings of one phase may select the same route. Then the first routing in order (and the first service in it) decides that route's page. This is deliberate and tested, not an error.
    - A window that fails validation is **invalid** and is never armed.
 10. **Overlap:** if several active windows cover a route, the most severe action wins (`block > interstitial > banner`). On a tie, the lexicographically smallest window name wins.
 
@@ -318,7 +320,7 @@ Implementation notes:
   - block HTML and block problem+json per (page, locale, window, phase)
 
   `Check()` returns a shared pointer, so serving a decision allocates nothing. (gRPC only reads the message, so sharing is safe.) Bodies are Go `string`s (the proto field type). `.Until` varies per window and phase, which is why the variants are keyed that way. `banner` has no body.
-- **`Retry-After`** is precomputed as an HTTP-date: the end of the *contiguous* run of block phases, omitted if unknown. Nothing is computed per request except the interstitial cookie comparison.
+- **`Retry-After`** is precomputed as an HTTP-date: the end of the *contiguous* run of block phases, omitted if unknown. In a run of several block phases, `Retry-After` is the end of the whole run while `.Until` and problem+json `until` are the end of the current phase: the header says when to come back, the text says what happens next. It also covers a run whose last phase is followed by a pending phase: it ends whenever someone presses "Start next phase now", so neither `Retry-After` nor `.Until`/`until` promise `endsAt`. Nothing is computed per request except the interstitial cookie comparison.
 - **Expected allocations:** decoding the request (unavoidable, outside the budget) plus ≤ 2 in our code. If the benchmark shows more, fix the code, not the gate.
 - **Interstitial cookie:** `mm_seen_<hash8(window.UID)>=<phaseKey>; Path=/; HttpOnly; SameSite=Lax`.
   - It is a **session cookie**: no `Max-Age`, no `Secure`. Behind a TLS-terminating load balancer Envoy often sees `http`, and a `Secure` cookie would then make the interstitial loop forever.
@@ -341,7 +343,7 @@ There is exactly one: `GET /__maintenance-manager/status?locale=de-CH`.
 
 - **Response:** 200 JSON `{action, window, phase, title, message, until, locale}`, with headers `X-Maintenance-Manager: 1` and `Cache-Control: no-store`. `action` is `"none"` if nothing is active for this route or a valid bypass header is present.
 - **It exists only while the route is armed.** Otherwise the request reaches the app, usually as a 404. The JS client treats any response **without** an `X-Maintenance-Manager` header as "nothing active". Apps may answer this path themselves with a cheap 204 (optional, documented).
-- **Bypass for your team:** the request header `X-Maintenance-Manager-Bypass: <token>`, set with a browser header extension.
+- **Bypass for your team:** the request header `X-Maintenance-Manager-Bypass: <token>`, set with a browser header extension. The token is empty (bypass off) or at least 16 characters (the chart schema and `serve` refuse shorter ones: the status endpoint would make a short token guessable). Changing it takes a `kubectl rollout restart` (the pod reads it at start).
   - Compared in constant time.
   - Stripped before the app **on armed routes**. At rest Envoy never calls us, so the header passes through untouched. Send it only during maintenance (README says so).
   - There is no bypass endpoint and no bypass cookie, so the token never lands in URLs, logs or app backends.
@@ -1131,12 +1133,12 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 |---|---|---|
 | D1 | Exact harden-runner allow-list for `publish`/`release`/`verify` | Start in block mode with §17.2's list and fix the misses from the job log via a `fix(release):` PR. A `publish`/`release` miss means the version isn't published yet, so the next releasable merge retries it. A `verify` miss after publish is proven by the next release. M1's exit is "first release published, `verify` green". **First release (M1):** no allow-list miss, but two transient failures: GHCR answered `DENIED` to one of ko's parallel SBOM pushes while it created the package, and on the re-run harden-runner refused the first connection to the allow-listed `proxy.golang.org` ("connection refused", seconds after it started). Fix: release jobs prefetch modules and tools with retries (`scripts/ci/prefetch.sh`), and `ko build` gets one retry (same digests). **`verify` miss (v0.1.0):** `gh attestation verify` fetches the attestation bundle from `tmaproduction.blob.core.windows.net`, which was blocked; added to `verify`'s list. The attestations themselves verified fine outside CI. |
 | D2 | Whether new GHCR packages start private or public | Check after M1 (`crane manifest` anonymously); adjust §21.4's wording. **Settled (M1):** public — anonymous manifest GETs for both packages returned 200 right after `v0.1.0`. §21.4 rewritten |
-| D3 | Whether the workflow-execution event rule affects Dependabot runs | Watch the first Dependabot PR's run; if blocked, document the impact and the owner's options |
+| D3 | Whether the workflow-execution event rule affects Dependabot runs | Watch the first Dependabot PR's run; if blocked, document the impact and the owner's options. **Settled (M3):** not affected. Dependabot's first PRs (#7, #8, `tools/` bumps) ran the full CI as `pull_request` events, e2e included, and the `ship` gate exempted them by author |
 | D4 | (PAT only) Whether the PAT can read `security_and_analysis` | Try it in §21.3 verification; if not, rely on the script summary (already allowed) |
 | D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README |
 | D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does |
-| D7 | `Check()` allocation count achievable with go-control-plane protos | Benchmark; if > 2 is unavoidable in proto handling, set the gate to the measured floor and explain why |
-| D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers |
+| D7 | `Check()` allocation count achievable with go-control-plane protos | Benchmark; if > 2 is unavoidable in proto handling, set the gate to the measured floor and explain why. **Measured (M3):** 0 allocs/op and about 135 ns/op (block HTML with Accept-Language negotiation, laptop). Route metadata lookups, header lookups, cookie scanning, locale matching and the query split all work on the decoded request's strings without copying, and every response is a shared precomputed value. The gate stays at ≤ 2 allocs/op and < 50 µs/op (`TestCheckBudget`, run by `test` with `MM_BENCH_GATE=1`); `TestCheckAllocs` holds every hot path at ≤ 2 in plain `go test` |
+| D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers. **M3 (laptop, E1–E5 + E8, EG v1.9.1):** tools 54 s (cold build, outside the setup clock), setup 1m17s, tests about 115 s, total 3m12s; E8 alone waits about 75 s for its dated phase. **CI (M2):** about 7.3 min per leg on ubuntu-24.04 |
 | D9 | The node port and kind port mapping values | Pick fixed values in `test/e2e`, document them. **Settled (M2):** Envoy NodePort 30080 ↔ `127.0.0.1:30080` (`test/e2e/testdata/kind.yaml`, `gateway.yaml`); kind node `kindest/node:v1.35.8` by digest, the newest Kubernetes both EG 1.8 (1.32–1.35) and 1.9 (1.33–1.36) support |
 | D10 | Default page look (built-in template) | Your call: plain, accessible, inline CSS, dark-mode aware, < 8 KB |
 | D11 | README wording, pitch and examples | Your call, following the voice rules in §20.2 |

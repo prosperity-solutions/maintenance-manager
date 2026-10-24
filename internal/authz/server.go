@@ -6,10 +6,13 @@ package authz
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
@@ -17,6 +20,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+
+	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
 // Addr is the authz listen address. Hardcoded on purpose (§11): the
@@ -54,26 +60,170 @@ type Server struct {
 	// production).
 	Drain time.Duration
 
-	// BlockRoute, when set, blocks that one route with the static page. It
-	// is the hidden --e2e-block-route flag of M2; M3 replaces it with
-	// windows.
-	BlockRoute *RouteKey
+	// Now is the clock (time.Now when nil). Check() decides by it (§4.4).
+	Now func() time.Time
+
+	tbl atomic.Pointer[table]
 }
 
-// Check answers whether a request may pass. No I/O, no locks, no logging.
-// Until windows exist (M3) only the --e2e-block-route route is blocked.
+// Update compiles a snapshot and swaps it in atomically. Check() keeps
+// answering from the previous table until the swap.
+func (s *Server) Update(snap *snapshot.Snapshot) {
+	s.tbl.Store(compile(snap, s.Log))
+}
+
+// Ready reports whether a snapshot has been loaded.
+func (s *Server) Ready() bool { return s.tbl.Load() != nil }
+
+// Check answers whether a request may pass (§6). No I/O, no locks, no
+// logging: every answer is a precomputed response from the current table.
 func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.CheckResponse, error) {
-	if s.BlockRoute == nil {
+	http := req.GetAttributes().GetRequest().GetHttp()
+	headers := http.GetHeaders()
+	tbl := s.tbl.Load()
+	if tbl == nil { // not ready: fail open, but never forward a bypass token
+		if _, ok := headers[bypassHeader]; ok {
+			return okStripResponse, nil
+		}
 		return okResponse, nil
 	}
-	key, ok := routeKey(req)
-	if !ok || key != *s.BlockRoute {
-		return okResponse, nil
+	path, query, _ := strings.Cut(http.GetPath(), "?")
+
+	token, hasBypassHdr := headers[bypassHeader]
+	bypass := hasBypassHdr && tbl.bypass != "" && constantTimeEqual(token, tbl.bypass)
+	ok := okResponse
+	if hasBypassHdr {
+		ok = okStripResponse
 	}
-	if wantsHTML(req.GetAttributes().GetRequest().GetHttp()) {
-		return staticBlockHTMLResponse, nil
+
+	key, found := routeKey(req)
+	if !found {
+		return ok, nil
 	}
-	return staticBlockJSONResponse, nil
+	timeline := tbl.routes[key]
+	if timeline == nil {
+		return ok, nil
+	}
+	now := s.now()
+	d := at(timeline, now)
+
+	// "//__maintenance-manager/status" too, in case :path was not normalized.
+	if path == statusPath || (len(path) > len(statusPath) && strings.TrimLeft(path, "/") == statusPath[1:]) {
+		return statusFor(d, http.GetMethod(), query, headers["accept-language"], bypass), nil
+	}
+	if bypass || d == nil {
+		return ok, nil
+	}
+
+	html := wantsHTML(http)
+	switch d.action {
+	case mmv1.ActionBanner:
+		return d.passFor(hasBypassHdr), nil
+	case mmv1.ActionInterstitial:
+		if !html || cookieValue(headers["cookie"], d.cookiePrefix) == d.phaseKey {
+			return d.passFor(hasBypassHdr), nil
+		}
+		return d.page[d.locales.Resolve("", headers["accept-language"])], nil
+	case mmv1.ActionBlock:
+		loc := d.locales.Resolve("", headers["accept-language"])
+		if html {
+			return d.page[loc], nil
+		}
+		return d.problem[loc], nil
+	}
+	return ok, nil
+}
+
+func (s *Server) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+func (d *decision) passFor(hasBypassHdr bool) *authv3.CheckResponse {
+	if hasBypassHdr {
+		return d.passStrip
+	}
+	return d.pass
+}
+
+// at returns the decision at t. Timelines hold a few entries.
+func at(timeline []*decision, t time.Time) *decision {
+	for _, d := range timeline {
+		if d.src.Contains(t) {
+			return d
+		}
+	}
+	return nil
+}
+
+// statusFor answers GET/HEAD /__maintenance-manager/status (§7).
+func statusFor(d *decision, method, query, acceptLanguage string, bypass bool) *authv3.CheckResponse {
+	head := method == "HEAD"
+	if !head && method != "GET" {
+		return statusMethod
+	}
+	if d == nil || bypass {
+		if head {
+			return statusNoneHead
+		}
+		return statusNone
+	}
+	loc := d.locales.Resolve(queryParam(query, "locale"), acceptLanguage)
+	if head {
+		return d.statusHead[loc]
+	}
+	return d.status[loc]
+}
+
+// queryParam returns the raw value of name in a query string, without
+// allocating. Locale tags need no unescaping.
+func queryParam(query, name string) string {
+	for query != "" {
+		var kv string
+		kv, query, _ = strings.Cut(query, "&")
+		k, v, _ := strings.Cut(kv, "=")
+		if k == name {
+			return v
+		}
+	}
+	return ""
+}
+
+// constantTimeEqual compares two strings in time independent of their
+// content, without converting them to []byte (which allocates for long
+// tokens). Only the length can leak, as with crypto/subtle.
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := 0; i < len(a); i++ {
+		v |= a[i] ^ b[i]
+	}
+	return subtle.ConstantTimeByteEq(v, 0) == 1
+}
+
+// cookieValue finds "name=" in a Cookie header at a cookie boundary and
+// returns its value, without allocating.
+func cookieValue(header, prefix string) string {
+	for header != "" {
+		i := strings.Index(header, prefix)
+		if i < 0 {
+			return ""
+		}
+		// ",": Envoy joins repeated Cookie headers with a comma.
+		if i == 0 || header[i-1] == ' ' || header[i-1] == ';' || header[i-1] == ',' {
+			v := header[i+len(prefix):]
+			if j := strings.IndexAny(v, ";,"); j >= 0 {
+				v = v[:j]
+			}
+			return strings.TrimSpace(v)
+		}
+		header = header[i+len(prefix):]
+	}
+	return ""
 }
 
 // NeedLeaderElection reports false: every replica answers Check().

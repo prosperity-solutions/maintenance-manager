@@ -32,22 +32,3 @@ func denied(code typev3.StatusCode, contentType, body string, extra ...*corev3.H
 		}},
 	}
 }
-
-// The static block of M2: one route named by --e2e-block-route, the built-in
-// texts, no end time (so no Retry-After). M3 replaces it with rendered,
-// per-window responses.
-const (
-	staticBlockHTML = `<!doctype html><html lang="en"><meta charset="utf-8">` +
-		`<meta name="viewport" content="width=device-width,initial-scale=1">` +
-		`<title>We&#39;ll be right back</title>` +
-		`<h1>We&#39;ll be right back</h1><p>Scheduled maintenance.</p></html>`
-
-	staticBlockJSON = `{"type":"https://maintenance-manager.oss.life.li/problems/maintenance",` +
-		`"title":"We'll be right back","status":503,"detail":"Scheduled maintenance.",` +
-		`"window":"e2e-block","until":null}`
-)
-
-var (
-	staticBlockHTMLResponse = denied(typev3.StatusCode_ServiceUnavailable, "text/html; charset=utf-8", staticBlockHTML)
-	staticBlockJSONResponse = denied(typev3.StatusCode_ServiceUnavailable, "application/problem+json", staticBlockJSON)
-)
