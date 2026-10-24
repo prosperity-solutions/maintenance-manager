@@ -102,6 +102,12 @@ reach `main` (W2). The workflow execution policy restricts which *events* may
 start a workflow (`push`, `pull_request`), but it cannot tell branches apart on
 push: that is why verification is pinned to `main`. Always install by digest.
 
+The website is deployed by `ci.yml`'s `pages` job, the only job besides
+`attest` with an OIDC token, and locked down the same way: no checkout, no
+shell, one GitHub-owned action. A run from any other branch cannot publish the
+site: the owner's hardening script restricts the `github-pages` environment to
+`main`.
+
 ## How this project was built
 
 An AI agent (Claude Code) built this repository unattended, from

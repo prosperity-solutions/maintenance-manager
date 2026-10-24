@@ -28,7 +28,8 @@ below 1.0. Chart version = app version.
 | `release` | Pulls the chart back by digest, writes `SHA256SUMS` (chart `.tgz` and the JS client `client/maintenance-manager.js`) and `THIRD_PARTY_LICENSES.csv`, creates a **draft** release, uploads and checks every asset, then publishes it. Publishing creates the tag and locks the release (immutable releases). |
 | `verify` | `gh attestation verify` for both digests, pinned to `ci.yml` on `refs/heads/main`; the image has both platforms; the pulled chart renders. |
 
-Digests and the version move between jobs only as job outputs. No artifacts, no
+Digests and the version move between jobs only as job outputs. No artifacts (the
+website's Pages artifact never reaches a release job), no
 caches in release jobs, no secrets: `GITHUB_TOKEN` and GitHub OIDC only.
 
 ## The source of truth

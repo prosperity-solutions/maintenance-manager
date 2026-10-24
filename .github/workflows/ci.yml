@@ -287,6 +287,42 @@ jobs:
           fi
           echo "✅ all green"
 
+  # ---- Website: push to main only (docs/HANDOVER.md §15) ----
+
+  site:
+    name: site
+    needs: all-green
+    if: ${{ !cancelled() && needs.all-green.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # site/ is the website as it is: nothing is built. The artifact holds only
+      # that folder and goes to Pages, never into a release (A3).
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  pages:
+    name: pages
+    needs: site
+    if: ${{ !cancelled() && needs.site.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # No checkout, no run steps, first-party actions only, like attest: the
+    # second job that holds an OIDC token, which Pages requires (A4).
+    permissions:
+      pages: write # publish the site artifact
+      id-token: write # prove to Pages that this run is the one publishing
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
   # ---- Release: push to main only (docs/HANDOVER.md §16) ----
 
   publish:

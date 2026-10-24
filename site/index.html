@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maintenance Manager for Envoy®</title>
+<meta name="description" content="Flip a switch, your apps show a maintenance page. Flip it back, they're live. A Helm chart for Envoy Gateway on Kubernetes.">
+<style>
+  :root {
+    --ink: #000;
+    --paper: #fffff0;
+    --night: #000040;
+    --link: #0000ee;
+    --visited: #551a8b;
+    --hazard: #ffcc00;
+    --red: #cc0000;
+    --lime: #00ff00;
+    --comic: "Comic Sans MS", "Comic Sans", "Chalkboard SE", "Comic Neue", cursive;
+    --mono: "Courier New", Courier, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--night); }
+  body {
+    margin: 0;
+    padding: 0 16px 32px;
+    color: var(--ink);
+    font: 16px/1.55 var(--comic);
+    /* the starfield tile every homepage had */
+    background-color: var(--night);
+    background-image:
+      radial-gradient(1px 1px at 12px 18px, #fff 99%, transparent),
+      radial-gradient(1px 1px at 61px 47px, #ccf 99%, transparent),
+      radial-gradient(2px 2px at 33px 79px, #fff 99%, transparent),
+      radial-gradient(1px 1px at 88px 9px, #ffc 99%, transparent),
+      radial-gradient(1px 1px at 97px 71px, #fff 99%, transparent);
+    background-size: 110px 100px;
+  }
+  a { color: var(--link); }
+  a:visited { color: var(--visited); }
+  a:focus-visible { outline: 3px dashed var(--red); outline-offset: 2px; }
+
+  /* the "banner phase", fittingly */
+  .banner {
+    margin: 0 -16px;
+    padding: 6px 16px;
+    background: var(--hazard);
+    border-bottom: 3px solid #000;
+    font: bold 15px/1.4 var(--comic);
+    text-align: center;
+  }
+
+  .marquee {
+    overflow: hidden;
+    margin: 12px auto 0;
+    text-align: center;
+    max-width: 760px;
+    color: var(--lime);
+    font: bold 16px var(--comic);
+  }
+  .marquee span {
+    display: inline-block;
+    animation: scroll 5s linear 1;
+  }
+  @keyframes scroll { from { transform: translateX(100vw); } }
+
+  .page {
+    max-width: 760px;
+    margin: 12px auto 0;
+    background: var(--paper);
+    border: 4px outset #c0c0c0;
+    padding: 20px 24px 28px;
+  }
+  @media (max-width: 520px) { .page { padding: 16px 14px 24px; } }
+
+  h1, h2, h3 { font-family: var(--comic); line-height: 1.2; }
+  h1 {
+    margin: 4px 0 8px;
+    font-size: clamp(28px, 6vw, 42px);
+    text-align: center;
+    color: var(--red);
+    text-shadow: 2px 2px 0 var(--hazard), 4px 4px 0 #000;
+  }
+  h2 {
+    margin: 32px 0 10px;
+    font-size: 26px;
+    color: #000080;
+  }
+  h2::before { content: "★ "; color: var(--red); }
+  h3 { margin: 22px 0 6px; font-size: 18px; color: #800080; }
+  .tagline {
+    margin: 0 auto;
+    max-width: 560px;
+    text-align: center;
+    font: bold 18px/1.4 var(--comic);
+  }
+
+  .sign-row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 18px 0 6px;
+  }
+  .sign-row svg { flex: none; }
+  /* Everything that moves stops within five seconds (WCAG 2.2.2): no script, so no pause button. */
+  .blink { animation: blink 1s steps(1) 5; }
+  @keyframes blink { 50% { visibility: hidden; } }
+  .construction {
+    font: bold 20px var(--comic);
+    color: var(--red);
+    text-align: center;
+  }
+
+  .dig { transform-origin: 46px 46px; animation: dig 0.8s ease-in-out 6 alternate; }
+  @keyframes dig { from { transform: rotate(-14deg); } to { transform: rotate(10deg); } }
+  .lamp { animation: blink 0.6s steps(1) 8; }
+
+  hr.rainbow {
+    border: 0;
+    height: 6px;
+    margin: 26px 0;
+    background: linear-gradient(90deg, red, orange, yellow, lime, cyan, blue, violet);
+  }
+
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  ul.stars { list-style: none; padding-left: 4px; }
+  ul.stars li::before { content: "✦ "; color: var(--red); }
+
+  code {
+    font: 14px var(--mono);
+    background: #eeeedd;
+    padding: 0 3px;
+  }
+  pre {
+    margin: 10px 0;
+    padding: 12px;
+    overflow-x: auto;
+    background: #000;
+    color: var(--lime);
+    border: 3px inset #c0c0c0;
+    font: 13px/1.45 var(--mono);
+  }
+  pre code { background: none; padding: 0; font: inherit; }
+
+  table.phases {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 2px;
+    border: 3px outset #c0c0c0;
+    background: #c0c0c0;
+    font-size: 14px;
+  }
+  table.phases th, table.phases td {
+    padding: 6px 8px;
+    border: 1px inset #c0c0c0;
+    background: #fff;
+    text-align: left;
+    vertical-align: top;
+  }
+  table.phases td { overflow-wrap: anywhere; }
+  table.phases th { background: #000080; color: #fff; font-family: var(--comic); }
+
+  .new {
+    display: inline-block;
+    padding: 0 4px;
+    margin-left: 4px;
+    background: var(--red);
+    color: #ff0;
+    font: bold 12px var(--comic);
+    transform: rotate(-6deg);
+    animation: blink 1.2s steps(1) 4;
+  }
+
+  .counter {
+    margin: 30px 0 8px;
+    text-align: center;
+    font-size: 13px;
+  }
+  .counter b {
+    display: inline-block;
+    margin: 0 4px;
+    padding: 2px 6px;
+    background: #000;
+    color: #f00;
+    font: bold 18px var(--mono);
+    letter-spacing: 3px;
+    border: 2px inset #808080;
+  }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    margin: 14px 0;
+  }
+  .badge {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 88px;
+    height: 31px;
+    border: 1px solid #000;
+    font: bold 9px/1.1 var(--comic);
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .b1 { background: linear-gradient(#ffd, #fc0); }
+  .b2 { background: #000; color: var(--lime); }
+  .b3 { background: #336; color: #fff; }
+  .b4 { background: #c0c0c0; }
+
+  .webring {
+    margin: 0 auto;
+    max-width: 420px;
+    padding: 6px;
+    border: 2px ridge #c0c0c0;
+    text-align: center;
+    font: 13px var(--comic);
+  }
+  footer {
+    margin-top: 18px;
+    font-size: 12px;
+    color: #444;
+    text-align: center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="banner" role="note">
+  🚧 Scheduled maintenance: this homepage has been under construction since 2001. Please pardon our dust.
+</div>
+
+<div class="marquee" aria-hidden="true">
+  <span>*** WELCOME TO THE MAINTENANCE MANAGER HOMEPAGE *** banners * interstitials * 503 pages * no database * fail-open * sign our guestbook!!! ***</span>
+</div>
+
+<main class="page">
+
+  <div class="sign-row" aria-hidden="true">
+    <svg width="96" height="96" viewBox="0 0 92 92">
+      <rect x="15" y="15" width="62" height="62" transform="rotate(45 46 46)" fill="#ffcc00" stroke="#000" stroke-width="4"/>
+      <circle cx="38" cy="30" r="5" fill="#000"/>
+      <path d="M38 36 L34 52 L28 64 M34 52 L42 64" stroke="#000" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <g class="dig">
+        <path d="M37 40 L52 50" stroke="#000" stroke-width="4" stroke-linecap="round"/>
+        <path d="M52 50 L62 62" stroke="#000" stroke-width="3"/>
+        <path d="M58 60 L66 58 L68 66 Z" fill="#000"/>
+      </g>
+      <path d="M56 70 Q64 62 72 70 Z" fill="#000"/>
+    </svg>
+    <div class="construction">
+      <span class="blink">UNDER CONSTRUCTION</span><br>
+      <small>(the page. The software is done.)</small>
+    </div>
+    <svg width="64" height="96" viewBox="0 0 64 96">
+      <circle class="lamp" cx="32" cy="12" r="9" fill="#ff8800" stroke="#000" stroke-width="2"/>
+      <rect x="29" y="20" width="6" height="12" fill="#000"/>
+      <rect x="4" y="32" width="56" height="16" fill="#fff" stroke="#000" stroke-width="2"/>
+      <path d="M8 32 L22 48 M24 32 L38 48 M40 32 L54 48" stroke="#ff3300" stroke-width="6"/>
+      <rect x="10" y="48" width="6" height="44" fill="#666"/>
+      <rect x="48" y="48" width="6" height="44" fill="#666"/>
+    </svg>
+  </div>
+
+  <h1>Maintenance Manager for Envoy®</h1>
+  <p class="tagline">Flip a switch, your apps show a maintenance page. Flip it back, they're live. Their routes never notice.</p>
+
+  <hr class="rainbow">
+
+  <p>A self-contained Helm chart that puts web apps behind <b>maintenance pages,
+  interstitials and banners</b> on any Kubernetes® cluster running
+  <b>Envoy Gateway ≥ 1.8</b>, without touching the apps or their HTTPRoutes.</p>
+
+  <ul class="stars">
+    <li><b>Hands off your routes.</b> It only reads HTTPRoutes, so it works where a platform owns and regenerates them.</li>
+    <li><b>Zero overhead at rest.</b> No window armed, no extra hop: Envoy never calls it.</li>
+    <li><b>Fail-open.</b> If it is down, slow or misconfigured, traffic flows as if it was never there.</li>
+    <li><b>Plays nice with platform auth.</b> Its policy merges into Gateway-level SecurityPolicies instead of replacing them.</li>
+    <li><b>No database.</b> State lives in three custom resources.</li>
+  </ul>
+
+  <h2>How it works</h2>
+  <p>You describe three things, usually in the built-in editor:</p>
+  <ul>
+    <li>a <b>MaintenanceService</b>: which HTTPRoutes make up an app (a label selector);</li>
+    <li>a <b>MaintenancePage</b>: what users see (an HTML template and texts per language);</li>
+    <li>a <b>MaintenanceWindow</b>: when, and what happens, as phases.</li>
+  </ul>
+
+  <table class="phases">
+    <tr><th scope="col">Phase</th><th scope="col">What users get</th></tr>
+    <tr><td><code>banner</code></td><td>The app, plus a header it can show as a banner.</td></tr>
+    <tr><td><code>interstitial</code></td><td>Your page once per session, then the app.</td></tr>
+    <tr><td><code>block</code></td><td>A 503 with your page, or <code>application/problem+json</code> for APIs, plus <code>Retry-After</code>.</td></tr>
+  </table>
+
+  <p>Fifteen minutes before a window starts, it attaches one SecurityPolicy per
+  app namespace to the matching routes, so Envoy asks it about every request.
+  After the window, it removes it.</p>
+
+  <h2>Install</h2>
+  <p>Every <a href="https://github.com/prosperity-solutions/maintenance-manager/releases">release</a>
+  lists its chart and image digests, with these commands ready to paste.
+  Check it was built here, then install it by digest:</p>
+<pre><code>gh attestation verify oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sha256:&lt;chart digest&gt; \
+  --repo prosperity-solutions/maintenance-manager \
+  --signer-workflow prosperity-solutions/maintenance-manager/.github/workflows/ci.yml \
+  --source-ref refs/heads/main --deny-self-hosted-runners
+
+helm install mm oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sha256:&lt;chart digest&gt; \
+  -n maintenance-manager --create-namespace --set editor.password=&lt;at least 12 characters&gt;</code></pre>
+
+  <h3>Then open the editor <span class="new">NEW!</span></h3>
+<pre><code>kubectl -n maintenance-manager port-forward svc/maintenance-manager 8080
+# http://localhost:8080, user admin, the password from editor.password</code></pre>
+  <p>A dashboard shows which windows are armed, which routes they cover, and
+  whether Envoy accepted the policy. <b>Start next phase now</b> is one click.</p>
+
+  <h2>Tell users in the app</h2>
+  <p>A single file, no dependencies, under 4 KB gzipped. It shows a banner
+  before maintenance, covers the page during a block, and reloads the tab when
+  it ends:</p>
+<pre><code>&lt;script src="/static/maintenance-manager.js" data-dismiss="click" defer&gt;&lt;/script&gt;</code></pre>
+  <p>Self-host it from the release assets. It works under a strict CSP and
+  Trusted Types.</p>
+
+  <h2>Good to know</h2>
+  <h3>The 60-second drain</h3>
+  <p>Attaching or removing a policy makes Envoy drain the listener: open
+  connections close gracefully over 60 seconds and reconnect. That happens when
+  a window arms and disarms, not during maintenance.</p>
+  <h3>Letting your team through</h3>
+  <p>Set a bypass token and send it as a header with a browser extension. No
+  bypass links and no cookies, so the token never lands in URLs or logs.</p>
+  <h3>If something breaks</h3>
+  <p>Envoy lets traffic through. And a window can always be stopped from the
+  command line:</p>
+<pre><code>kubectl -n maintenance-manager patch mmw &lt;window&gt; --type=merge -p '{"spec":{"enabled":false}}'</code></pre>
+
+  <p>All the details are in the
+  <a href="https://github.com/prosperity-solutions/maintenance-manager#readme">README</a>.</p>
+
+  <hr class="rainbow">
+
+  <p class="counter">You are visitor number <b>000503</b> <small>(Retry-After: never)</small></p>
+
+  <div class="badges" aria-hidden="true">
+    <span class="badge b1">Fail-open<br>certified</span>
+    <span class="badge b2">0 allocs<br>per request</span>
+    <span class="badge b3">No JavaScript<br>on this page</span>
+    <span class="badge b4">Best viewed<br>at 800×600</span>
+  </div>
+
+  <div class="webring">
+    <a href="https://outfit.oss.life.li">◄ prev</a> ·
+    the Prosperity Solutions Webring ·
+    <a href="https://github.com/prosperity-solutions/maintenance-manager">next ►</a>
+  </div>
+
+  <p class="counter">
+    <a href="https://github.com/prosperity-solutions/maintenance-manager">GitHub</a> ·
+    <a href="https://github.com/prosperity-solutions/maintenance-manager/releases">Releases</a> ·
+    <a href="https://github.com/prosperity-solutions/maintenance-manager/blob/main/docs/security.md">Security</a> ·
+    <a href="https://github.com/prosperity-solutions/maintenance-manager/issues">Sign our guestbook</a>
+  </p>
+
+  <footer>
+    MIT licence. Built by agents in hard hats, with Claude Code.<br>
+    Envoy® and Kubernetes® are registered trademarks of The Linux Foundation.
+    This project is not affiliated with or endorsed by The Linux Foundation.
+  </footer>
+</main>
+
+</body>
+</html>

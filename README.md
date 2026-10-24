@@ -2,6 +2,8 @@
 
 **Flip a switch, your apps show a maintenance page. Flip it back, they're live. Their routes never notice.**
 
+Website: [maintenance-manager.oss.life.li](https://maintenance-manager.oss.life.li)
+
 A self-contained Helm chart that puts web apps behind **maintenance pages,
 interstitials and banners** on any Kubernetes® cluster running **Envoy Gateway
 ≥ 1.8**, without touching the apps or their HTTPRoutes.
@@ -54,16 +56,6 @@ helm install mm oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sh
 The chart pins the image by digest; the same `gh attestation verify` with
 `oci://ghcr.io/prosperity-solutions/maintenance-manager@sha256:<image digest>`
 checks the image. More in [docs/security.md](docs/security.md).
-
-**On Qovery:**
-
-1. Organization settings → Helm repositories: add
-   `oci://ghcr.io/prosperity-solutions/charts` (OCI, public).
-2. Add a Helm service: chart `maintenance-manager`, the release's version
-   (verify that version's chart digest first, as above; Qovery takes a version),
-   **Allow cluster-wide resources** on, and `editor.password` from a Qovery
-   secret.
-3. Deploy.
 
 **Uninstall:** `helm uninstall mm -n maintenance-manager`. A pre-delete hook
 removes every SecurityPolicy and ReferenceGrant it created; your windows, pages
