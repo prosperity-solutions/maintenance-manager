@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -17,7 +18,7 @@ import (
 // Cleanup is `maintenance-manager cleanup`, run by the chart's pre-delete
 // hook (§5.1): scale our Deployment to 0 and wait until its pods are gone
 // and the Lease is free, so no leader can write again; then delete our
-// SecurityPolicies (cluster-wide, by owner label), then our ReferenceGrants.
+// SecurityPolicies (cluster-wide, by owner label and name), then our ReferenceGrants.
 // It is idempotent: re-running after a partial failure finishes the job.
 func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.Logger) error {
 	var d appsv1.Deployment
@@ -67,13 +68,14 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 		return err
 	}
 
-	sel := client.MatchingLabels{LabelOwner: releaseNS, LabelManagedBy: managedBy}
+	// The same ownership rules as the controller: our SecurityPolicy name with
+	// our owner label, and every mm-from-<ns> grant in the release namespace.
 	for _, step := range []struct {
 		gvkList string
 		opts    []client.ListOption
 	}{
-		{"SecurityPolicyList", []client.ListOption{sel}},
-		{"ReferenceGrantList", []client.ListOption{sel, client.InNamespace(releaseNS)}},
+		{"SecurityPolicyList", []client.ListOption{client.MatchingLabels{LabelOwner: releaseNS}}},
+		{"ReferenceGrantList", []client.ListOption{client.InNamespace(releaseNS)}},
 	} {
 		list := &unstructured.UnstructuredList{}
 		gv := SecurityPolicyGVK.GroupVersion()
@@ -88,8 +90,8 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 			obj := &list.Items[i]
 			// Only our names: the controller never adopts other objects that
 			// carry our labels, so cleanup must not delete them either.
-			if ns, ok := grantNamespace(obj); (step.gvkList == "SecurityPolicyList" && obj.GetName() != SPName(releaseNS)) ||
-				(step.gvkList == "ReferenceGrantList" && (!ok || obj.GetName() != GrantName(ns))) {
+			if (step.gvkList == "SecurityPolicyList" && obj.GetName() != SPName(releaseNS)) ||
+				(step.gvkList == "ReferenceGrantList" && !strings.HasPrefix(obj.GetName(), grantPrefix)) {
 				continue
 			}
 			if err := client.IgnoreNotFound(c.Delete(ctx, obj)); err != nil {
@@ -120,18 +122,4 @@ func waitFor(ctx context.Context, timeout time.Duration, what string, f func() (
 		case <-time.After(time.Second):
 		}
 	}
-}
-
-// grantNamespace returns the single "from" namespace of one of our grants.
-func grantNamespace(g *unstructured.Unstructured) (string, bool) {
-	from, _, _ := unstructured.NestedSlice(g.Object, "spec", "from")
-	if len(from) != 1 {
-		return "", false
-	}
-	f0, ok := from[0].(map[string]any)
-	if !ok {
-		return "", false
-	}
-	ns, _, _ := unstructured.NestedString(f0, "namespace")
-	return ns, ns != ""
 }

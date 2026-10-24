@@ -251,7 +251,7 @@ spec:
   It has to be one grant per namespace because `from` is capped at 16 entries.
 - **Order:** arm = grant, then SP. Disarm = remove targets, delete the SP when it has none left, then delete the grant. This order is only for clean status, not for safety: with `failOpen`, EG bypasses an invalid SP rather than returning 500.
 - **Drift:** every reconcile compares our SP and grant with the desired ones and writes only on a difference. **As built (M4):** the write is a full `Update` (create when absent), not server-side apply: SSA never removes fields owned by another field manager, so a `bodyToExtAuth` (or `cors`) someone added with `kubectl edit` would survive it. The comparison tolerates API-server defaults inside our structures and treats any other spec key as drift. A no-op reconcile writes nothing (envtest checks the resourceVersion).
-- **GC:** on startup and on every reconcile, delete SPs and grants that carry **our owner label value** and are no longer needed.
+- **GC:** on startup and on every reconcile, delete our SPs and grants that are no longer needed. Ours means: an SP with **our name and our owner label value**, and any `mm-from-<ns>` grant in the release namespace (keyed by name, so a grant whose labels or spec were edited is repaired, not re-created forever).
 - **One install per cluster.** The CRDs and ClusterRole are cluster-scoped, so a second release fails on Helm's ownership check. README and NOTES.txt say so. The owner label keeps GC from ever touching anything else.
 - **Uninstall:** a Helm pre-delete hook Job runs `maintenance-manager cleanup`. It:
   1. scales the Deployment to 0 and waits;
@@ -274,7 +274,7 @@ A route is **in conflict**, and is removed from our SP's `targetRefs` (an RDS-on
 
 `targetSelectors` count with their namespace scope: `from: Same` (the default) is the SP's own namespace, `from: All` every namespace, and `from: Selector` is evaluated against namespace labels, as Envoy Gateway does. Treating `Selector` as "every namespace" would let any tenant disarm the whole cluster with a selector that matches nothing.
 
-Ownership is "our labels **and** our name": an SP with our labels but another name is foreign (conflict check, never adopted, never deleted by cleanup). A foreign SP squatting on our name in an app namespace blocks only that namespace (reported as a conflict); write errors, too, stay per namespace, so one tenant cannot stall arming elsewhere.
+Ownership is "our owner label **and** our name": an SP with our labels but another name is foreign (conflict check, never adopted, never deleted by cleanup); a lost `managed-by` label on ours is drift and gets repaired. A foreign SP squatting on our name in an app namespace blocks only that namespace (reported as a conflict); write errors, too, stay per namespace, so one tenant cannot stall arming elsewhere.
 
 A foreign parent SP *without* `extAuth` (JWT, OIDC, basic auth, CORS, IP rules…) is **not** a conflict. `mergeType: StrategicMerge` keeps it working, and EG reports `Merged=True`.
 
@@ -487,7 +487,7 @@ resources:
   - all verbs on our 3 CRDs
   - `get/list/watch/create/update/patch/delete` on referencegrants
   - `create` on leases, and `get/list/watch/update/patch` on the `maintenance-manager` Lease
-- **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment and its scale, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
+- **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
 
 On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabled.
 
@@ -509,7 +509,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 | pod slow or hung | 100 ms timeout → fail-open for that request; passive health check ejects the pod after 3 errors |
 | invalid SP (e.g. missing ReferenceGrant) | EG bypasses ext auth for that route (failOpen); no 500 |
 | K8s API down | snapshot keeps last state; authz keeps answering; editor writes fail visibly |
-| leader lost | another replica takes over (Lease); authz unaffected |
+| leader lost | another replica takes over (Lease); authz unaffected. A leader whose caches fail to sync 3 terms in a row gives the Lease up and stays out for one lease duration (15 s), so a healthy replica wins it |
 | invalid page | built-in default page served |
 | foreign SP appears on armed route | route removed from our SP within ~1 s; red in editor |
 | uninstall | pre-delete hook: scale to 0, delete SPs, delete grants |
@@ -526,7 +526,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
   - cookie keys, `.Until` / `Retry-After`
   - the controller's arm/disarm plan, written as a pure function `Plan(desired, actual) → []Action`
 - **Native Go fuzz tests** for `Accept-Language` parsing, cookie scanning and editor form decoding. Their seed corpus runs as plain unit tests.
-- **envtest** (build tag `envtest`, Kubernetes 1.36 assets via `setup-envtest`). Covers arming order, conflict-triggered target removal, GC by owner label, and `cleanup`. The tag keeps `go test ./...` and the pre-push hook asset-free.
+- **envtest** (build tag `envtest`, Kubernetes 1.36 assets via `setup-envtest`). Covers arming order, conflict-triggered target removal, drift repair (SP and grant), GC by ownership, tenant isolation (a squatter or a failing write affects only its namespace), namespace-selector scopes, and `cleanup`. The tag keeps `go test ./...` and the pre-push hook asset-free.
 - **`Check()` benchmark gate:** ≤ 2 allocs/op is a hard gate. Time must be < 50 µs/op on CI (shared runners are noisy). The 15 µs target is checked locally and reported in the PR.
 - **Workflow tests** (`test/workflows`, plain Go, run in `lint`): parse `.github/workflows/*.yml` and assert the rules in §17.2.
 - **JS client:** `node --test client/`, Node's built-in runner, no packages. Covers the pure functions: back-off, jitter bounds, status parsing, dismissal keys. Node comes from `actions/setup-node` pinned to the current LTS.

@@ -29,7 +29,9 @@ func SPName(releaseNS string) string { return "mm-" + snapshot.Hash8(releaseNS) 
 
 // GrantName is the ReferenceGrant for an app namespace, in the release
 // namespace: mm-from-<ns> (always fits: namespaces are ≤ 63 characters).
-func GrantName(appNS string) string { return "mm-from-" + appNS }
+func GrantName(appNS string) string { return grantPrefix + appNS }
+
+const grantPrefix = "mm-from-"
 
 func ownerLabels(releaseNS string) map[string]string {
 	return map[string]string{LabelManagedBy: managedBy, LabelOwner: releaseNS}

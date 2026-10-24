@@ -3,6 +3,9 @@ package controller
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/types"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -34,5 +37,22 @@ func TestDesiredSquatterBlocksNamespace(t *testing.T) {
 func TestOnlyRaces(t *testing.T) {
 	if onlyRaces(nil) {
 		t.Fatal("no error is not a race")
+	}
+}
+
+func TestRelevantUpdate(t *testing.T) {
+	ns := func(l map[string]string) *corev1.Namespace {
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Labels: l}}
+	}
+	if !relevantUpdate(ns(nil), ns(map[string]string{"team": "a"})) {
+		t.Fatal("a namespace label change must trigger (namespace selectors)")
+	}
+	if relevantUpdate(ns(map[string]string{"team": "a"}), ns(map[string]string{"team": "a"})) {
+		t.Fatal("a status-only update must not trigger")
+	}
+	o, n := ns(nil), ns(nil)
+	n.Generation = 2
+	if !relevantUpdate(o, n) {
+		t.Fatal("a spec change (generation) must trigger")
 	}
 }

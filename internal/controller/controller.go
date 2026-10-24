@@ -94,16 +94,22 @@ func (c *Controller) Start(ctx context.Context) error {
 		return nil
 	}
 	for ctx.Err() == nil {
-		c.campaign(ctx, kube)
+		wait := retryPeriod
+		if c.campaign(ctx, kube) {
+			// It gave up: stay out for a full lease duration, so a healthy
+			// replica, not this one, wins the Lease next.
+			wait = leaseDuration
+		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(retryPeriod):
+		case <-time.After(wait):
 		}
 	}
 	return nil
 }
 
-func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) {
+// campaign runs one leader election; it reports whether lead gave up.
+func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) (gaveUp bool) {
 	defer c.recover("campaign")
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -122,9 +128,9 @@ func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) {
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				c.Log.Info("leading: the controller arms and disarms routes")
-				c.lead(ctx)
-				// lead returned while still leading: it gave up. Stop renewing,
-				// so another replica can take over.
+				// lead returns while still leading only when it gives up: stop
+				// renewing, so another replica can take over.
+				gaveUp = c.lead(ctx)
 				cancelRun()
 			},
 			OnStoppedLeading: func() { c.Log.Info("not leading any more") },
@@ -132,9 +138,10 @@ func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) {
 	})
 	if err != nil {
 		c.Log.Error("controller: leader election setup failed", "err", err)
-		return
+		return false
 	}
 	elector.Run(runCtx) // returns when leadership is lost, lead gives up, or ctx is done
+	return gaveUp
 }
 
 func (c *Controller) recover(where string) {
@@ -149,25 +156,32 @@ func (c *Controller) recover(where string) {
 // Lease, so a healthy replica can take over. client-go releases the Lease
 // without waiting for this goroutine; optimistic concurrency (Create, Update
 // with resourceVersion, Delete with UID and resourceVersion preconditions)
-// keeps a late write from an ex-leader harmless.
-func (c *Controller) lead(ctx context.Context) {
+// keeps a late write from an ex-leader harmless. It reports whether it gave
+// up.
+func (c *Controller) lead(ctx context.Context) bool {
 	failures := 0
 	for ctx.Err() == nil {
 		err := c.safeTerm(ctx)
-		if err == nil {
-			return // ctx done
+		switch {
+		case err == nil:
+			return false // ctx done
+		case errors.Is(err, errKindsChanged):
+			c.Log.Info("a ListenerSet kind appeared or went away; restarting the controller's watches")
+			failures = 0
+			continue
 		}
 		failures++
 		c.Log.Error("controller term failed", "err", err, "failures", failures)
 		if failures >= maxTermFailures {
 			c.Log.Error("giving up the Lease so another replica can try")
-			return
+			return true
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(retryAfterErr):
 		}
 	}
+	return false
 }
 
 // safeTerm runs one term and turns a panic into an error.
@@ -179,6 +193,10 @@ func (c *Controller) safeTerm(ctx context.Context) (err error) {
 	}()
 	return c.term(ctx)
 }
+
+// errKindsChanged ends a term without counting as a failure: the served
+// ListenerSet kinds changed, so the next term watches the new set.
+var errKindsChanged = errors.New("served ListenerSet kinds changed")
 
 var (
 	listenerSetGVKs = []schema.GroupVersionKind{
@@ -206,9 +224,6 @@ func (c *Controller) term(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if reset, ok := c.Mapper.(meta.ResettableRESTMapper); ok {
-		reset.Reset() // discover kinds installed since the last term
-	}
 	grant := &unstructured.Unstructured{}
 	grant.SetGroupVersionKind(ReferenceGrantGVK)
 	byObject := map[client.Object]cache.ByObject{
@@ -216,12 +231,12 @@ func (c *Controller) term(ctx context.Context) error {
 	}
 	objs := []client.Object{&egv1a1.SecurityPolicy{}, &gwapiv1.Gateway{}, &corev1.Namespace{}, grant}
 	var lsLists []*unstructured.UnstructuredList
-	for _, gvk := range listenerSetGVKs {
-		ok, err := c.served(gvk)
-		if err != nil {
-			return err
-		}
-		if ok {
+	kinds, err := c.servedListenerSets()
+	if err != nil {
+		return err
+	}
+	for i, gvk := range listenerSetGVKs {
+		if kinds[i] {
 			ls := &unstructured.Unstructured{}
 			ls.SetGroupVersionKind(gvk)
 			objs = append(objs, ls)
@@ -299,18 +314,46 @@ func (c *Controller) term(ctx context.Context) error {
 		Namespace: c.Namespace, Lead: c.Lead, Shared: c.Shared, Leader: leaderCache, Writer: c.Writer,
 		Log: c.Log, Now: c.Now, ListenerSets: lsLists,
 	}
-	return c.loop(ctx, rec, kick)
+	return c.loop(ctx, rec, kick, kinds)
 }
 
-// loop reconciles on changes (debounced) and at the next arm boundary.
-func (c *Controller) loop(ctx context.Context, rec *Reconciler, kick <-chan struct{}) error {
+// servedListenerSets reports, per listenerSetGVKs entry, whether the API
+// server serves it now (the mapper is reset first, so new CRDs show up).
+func (c *Controller) servedListenerSets() ([]bool, error) {
+	if reset, ok := c.Mapper.(meta.ResettableRESTMapper); ok {
+		reset.Reset()
+	}
+	out := make([]bool, len(listenerSetGVKs))
+	for i, gvk := range listenerSetGVKs {
+		ok, err := c.served(gvk)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ok
+	}
+	return out, nil
+}
+
+// loop reconciles on changes (debounced) and at the next arm boundary. On
+// every resync it checks whether the served ListenerSet kinds changed (a
+// CRD installed later) and ends the term if so.
+func (c *Controller) loop(ctx context.Context, rec *Reconciler, kick <-chan struct{}, kinds []bool) error {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	kindCheck := time.NewTicker(resync)
+	defer kindCheck.Stop()
 	var first time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-kindCheck.C:
+			now, err := c.servedListenerSets()
+			if err != nil {
+				c.Log.Warn("checking served ListenerSet kinds failed; will retry", "err", err)
+			} else if !slices.Equal(now, kinds) {
+				return errKindsChanged
+			}
 		case <-kick:
 			now := time.Now()
 			if first.IsZero() {

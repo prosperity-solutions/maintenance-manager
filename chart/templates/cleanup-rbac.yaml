@@ -28,7 +28,7 @@ metadata:
 rules:
   # Scale our Deployment to zero, then wait for its pods and its Lease.
   - apiGroups: [apps]
-    resources: [deployments, deployments/scale]
+    resources: [deployments]
     resourceNames: [maintenance-manager]
     verbs: [get, patch]
   - apiGroups: [""]

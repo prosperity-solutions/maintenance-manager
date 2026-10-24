@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -118,7 +119,7 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		{r.Leader, &sps, nil},
 		{r.Leader, &gateways, nil},
 		{r.Leader, &namespaces, nil},
-		{r.Leader, &grants, []client.ListOption{inNS, client.MatchingLabels{LabelOwner: r.Namespace}}},
+		{r.Leader, &grants, []client.ListOption{inNS}},
 	} {
 		if err := l.reader.List(ctx, l.list, l.opts...); err != nil {
 			return Input{}, Actual{}, ex, err
@@ -154,11 +155,11 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 	actual := Actual{Policies: map[string]bool{}, Grants: map[string]bool{}}
 	for i := range sps.Items {
 		sp := &sps.Items[i]
-		// Ours means our labels AND our name. Anything else, labelled or not,
-		// is foreign and goes through the conflict check.
-		labelled := sp.Labels[LabelOwner] == r.Namespace && sp.Labels[LabelManagedBy] == managedBy
-		ours := labelled && sp.Name == SPName(r.Namespace)
-		if !labelled && sp.Name == SPName(r.Namespace) {
+		// Ours means our name AND our owner label (a lost managed-by label is
+		// drift, repaired by the update). Anything else, labelled or not, is
+		// foreign and goes through the conflict check.
+		ours := sp.Name == SPName(r.Namespace) && sp.Labels[LabelOwner] == r.Namespace
+		if !ours && sp.Name == SPName(r.Namespace) {
 			in.Blocked[sp.Namespace] = fmt.Sprintf("a SecurityPolicy %s/%s that is not ours has our name; maintenance-manager cannot arm this namespace until it is renamed or removed", sp.Namespace, sp.Name)
 		}
 		if ours {
@@ -171,18 +172,13 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		}
 		in.Policies = append(in.Policies, parsePolicy(sp, ours))
 	}
+	// The release namespace is ours, and so is every mm-from-<ns> grant in it,
+	// whatever its labels or spec say: keying by name lets the update repair
+	// drift instead of a create that fails with AlreadyExists forever.
 	for i := range grants.Items {
 		g := &grants.Items[i]
-		from, _, _ := unstructured.NestedSlice(g.Object, "spec", "from")
-		if len(from) != 1 {
-			continue
-		}
-		f0, ok := from[0].(map[string]any)
-		if !ok {
-			continue
-		}
-		ns, _, _ := unstructured.NestedString(f0, "namespace")
-		if g.GetName() != GrantName(ns) {
+		ns, ok := strings.CutPrefix(g.GetName(), grantPrefix)
+		if !ok || ns == "" {
 			continue
 		}
 		actual.Grants[ns] = true
