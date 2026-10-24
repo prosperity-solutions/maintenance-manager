@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,9 @@ func TestCheckPassesOverGRPC(t *testing.T) {
 	_ = lis.Close()
 
 	ctx, cancel := context.WithCancel(t.Context())
-	s := &Server{Addr: addr, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	var shutdown atomic.Bool
+	s := &Server{Addr: addr, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnShutdown: func() { shutdown.Store(true) }, Drain: 50 * time.Millisecond}
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
@@ -66,6 +69,9 @@ func TestCheckPassesOverGRPC(t *testing.T) {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("Start returned %v after cancel", err)
+		}
+		if !shutdown.Load() {
+			t.Fatal("OnShutdown was not called before stopping")
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("server did not stop within 10s of cancel")

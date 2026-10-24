@@ -37,7 +37,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "token": { "type": "string" }
+        "token": { "type": "string", "pattern": "^(.{16,})?$", "description": "Empty, or at least 16 characters." }
       }
     },
     "resources": { "type": "object" }

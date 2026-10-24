@@ -106,7 +106,7 @@ type MaintenanceWindowSpec struct {
 	// Enabled starts the window (and a phase 0 without startsAt); false stops
 	// it immediately.
 	// +optional
-	Enabled bool `json:"enabled,omitempty"`
+	Enabled bool `json:"enabled"`
 
 	// EndsAt ends the window. Without it the window runs until disabled.
 	// +optional

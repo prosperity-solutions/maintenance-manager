@@ -76,7 +76,10 @@ func serve(args []string, log *slog.Logger) int {
 	inNS := cache.ByObject{Namespaces: map[string]cache.Config{cfg.Namespace: {}}}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), manager.Options{
 		Scheme: scheme,
-		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
+		// Everything is read from the release namespace unless ByObject says
+		// otherwise; cluster-wide types (HTTPRoutes, SecurityPolicies) opt out
+		// there when they arrive, matching the ClusterRole.
+		Cache: cache.Options{DefaultNamespaces: map[string]cache.Config{cfg.Namespace: {}}, ByObject: map[client.Object]cache.ByObject{
 			&mmv1.MaintenanceService{}: inNS,
 			&mmv1.MaintenancePage{}:    inNS,
 			&mmv1.MaintenanceWindow{}:  inNS,
@@ -89,18 +92,23 @@ func serve(args []string, log *slog.Logger) int {
 				"/readyz":  ready,
 			},
 		},
-		HealthProbeBindAddress:        "0",
-		LeaderElection:                true,
-		LeaderElectionID:              "maintenance-manager",
-		LeaderElectionNamespace:       cfg.Namespace,
-		LeaderElectionReleaseOnCancel: true,
+		HealthProbeBindAddress: "0",
+		// No manager-level leader election: in controller-runtime v0.24 losing
+		// the Lease ends mgr.Start, which would take authz down with it (§12:
+		// leader lost, authz unaffected). The controller (M4) runs its own
+		// elector inside a runnable that every replica starts.
+		LeaderElection: false,
+		// Leaves room for the authz drain (10 s) and GracefulStop (5 s) within
+		// the pod's 30 s termination grace period.
+		GracefulShutdownTimeout: ptrTo(25 * time.Second),
 	})
 	if err != nil {
 		log.Error("serve: manager", "err", err)
 		return 1
 	}
 
-	if err := mgr.Add(&authz.Server{Addr: authz.Addr, Log: log}); err != nil {
+	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.ok.Store(false) }}
+	if err := mgr.Add(srv); err != nil {
 		log.Error("serve: add authz", "err", err)
 		return 1
 	}
@@ -153,3 +161,5 @@ func (c *cacheWatcher) Start(ctx context.Context) error {
 	c.ready.ok.Store(false)
 	return nil
 }
+
+func ptrTo[T any](v T) *T { return &v }

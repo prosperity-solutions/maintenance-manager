@@ -1,6 +1,12 @@
 {{- if and (not .Values.editor.password) (not .Values.editor.existingSecret) }}
 {{- fail "editor.password or editor.existingSecret is required: the editor has no default password. Set one with --set editor.password=... or point editor.existingSecret at a Secret with the key editor-password." }}
 {{- end }}
+{{- if eq .Values.editor.existingSecret (include "mm.name" .) }}
+{{- fail "editor.existingSecret must not be named maintenance-manager: the chart owns a Secret of that name. Pick another name." }}
+{{- end }}
+{{- if and (eq .Chart.AppVersion "0.0.0") (not .Values.image.tag) (not .Values.image.digest) }}
+{{- fail "This chart comes from a source checkout (appVersion 0.0.0), which has no published image. Set image.tag or image.digest, or install a released chart." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,9 +28,6 @@ spec:
     metadata:
       labels:
         {{- include "mm.labels" . | nindent 8 }}
-      annotations:
-        # Roll the pods when the password or token changes.
-        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ include "mm.name" . }}
       automountServiceAccountToken: true # the controller talks to the API server

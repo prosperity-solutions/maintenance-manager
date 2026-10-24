@@ -26,6 +26,15 @@ const Addr = ":9001"
 // gracefulStopTimeout caps GracefulStop on shutdown (§11).
 const gracefulStopTimeout = 5 * time.Second
 
+// DrainDelay is how long Check() keeps answering after shutdown starts and
+// /readyz fails, so Envoy moves to other endpoints before this one closes
+// (§11 SIGTERM: fail /readyz, keep serving 10 s, then GracefulStop).
+const DrainDelay = 10 * time.Second
+
+// maxRecvMsgSize bounds a CheckRequest. Envoy sends only the headers listed
+// in headersToExtAuth and never the body, so 64 KiB is generous.
+const maxRecvMsgSize = 64 << 10
+
 // okResponse lets a request through, untouched.
 var okResponse = &authv3.CheckResponse{
 	Status:       &status.Status{Code: int32(codes.OK)},
@@ -37,6 +46,13 @@ type Server struct {
 	authv3.UnimplementedAuthorizationServer
 	Addr string
 	Log  *slog.Logger
+
+	// OnShutdown runs when shutdown starts, before the drain; serve uses it
+	// to fail /readyz.
+	OnShutdown func()
+	// Drain is how long to keep serving after OnShutdown (DrainDelay in
+	// production).
+	Drain time.Duration
 }
 
 // Check answers whether a request may pass. Until windows exist (M3) every
@@ -65,6 +81,8 @@ func (s *Server) Start(ctx context.Context) error {
 			MinTime:             10 * time.Second,
 			PermitWithoutStream: true,
 		}),
+		grpc.MaxRecvMsgSize(maxRecvMsgSize),
+		grpc.MaxConcurrentStreams(1024),
 	)
 	authv3.RegisterAuthorizationServer(srv, s)
 
@@ -76,6 +94,13 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errc:
 		return fmt.Errorf("authz: serve: %w", err)
 	case <-ctx.Done():
+	}
+	if s.OnShutdown != nil {
+		s.OnShutdown()
+	}
+	if s.Drain > 0 {
+		s.Log.Info("authz draining", "for", s.Drain.String())
+		time.Sleep(s.Drain)
 	}
 	stopped := make(chan struct{})
 	go func() { srv.GracefulStop(); close(stopped) }()
