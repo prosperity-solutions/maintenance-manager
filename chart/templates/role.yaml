@@ -22,6 +22,10 @@ rules:
     resources: [leases]
     resourceNames: [maintenance-manager]
     verbs: [get, list, watch, update, patch]
+  # The uninstall hook waits until our pods are gone before it deletes.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
   # Our own Deployment only: the uninstall hook scales it to zero.
   - apiGroups: [apps]
     resources: [deployments, deployments/scale]

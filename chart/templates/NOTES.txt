@@ -1,9 +1,11 @@
 Maintenance Manager for Envoy® {{ .Chart.AppVersion }} is installed in {{ .Release.Namespace }}.
 
-This release is the walking skeleton: the resources, the chart and an authz
-server that lets every request pass. The editor (port 8080) and maintenance
-windows that actually gate traffic arrive in later releases; see
-https://github.com/prosperity-solutions/maintenance-manager/releases.
+Create a MaintenanceService (which routes), a MaintenancePage (what users see)
+and a MaintenanceWindow (when, and what happens) in {{ .Release.Namespace }}.
+Shortly before a window starts, maintenance-manager attaches a SecurityPolicy
+to the matching HTTPRoutes; the editor (port 8080) arrives in a later release.
+Creating or deleting that policy drains the Envoy listener for 60 s: open
+connections (WebSockets too) close gracefully and reconnect.
 
 Nothing reaches your apps until a MaintenanceWindow is armed. At rest, Envoy
 never calls maintenance-manager, and if it is ever down, traffic flows to your

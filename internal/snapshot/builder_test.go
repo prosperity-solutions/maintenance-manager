@@ -6,6 +6,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 )
 
@@ -52,18 +54,24 @@ func TestRelevantUpdate(t *testing.T) {
 }
 
 func TestStripRoute(t *testing.T) {
-	m := NewRouteMetadata()
+	m := &gwapiv1.HTTPRoute{}
 	m.Name, m.Namespace, m.Generation = "web", "shop", 7
 	m.Labels = map[string]string{"app": "shop"}
 	m.Annotations = map[string]string{"kubectl.kubernetes.io/last-applied-configuration": "{…}"}
 	m.ManagedFields = []metav1.ManagedFieldsEntry{{Manager: "kubectl"}}
+	m.Spec.ParentRefs = []gwapiv1.ParentReference{{Name: "eg"}}
+	m.Spec.Hostnames = []gwapiv1.Hostname{"shop.example"}
+	m.Spec.Rules = []gwapiv1.HTTPRouteRule{{}}
 	out, err := StripRoute(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := out.(*metav1.PartialObjectMetadata)
-	if got.Annotations != nil || got.ManagedFields != nil {
-		t.Fatal("annotations and managedFields must be dropped")
+	got := out.(*gwapiv1.HTTPRoute)
+	if got.Annotations != nil || got.ManagedFields != nil || got.Spec.Hostnames != nil || got.Spec.Rules != nil {
+		t.Fatal("annotations, managedFields, hostnames and rules must be dropped")
+	}
+	if len(got.Spec.ParentRefs) != 1 || got.Spec.ParentRefs[0].Name != "eg" {
+		t.Fatal("parentRefs must stay: the controller needs them (§5.3)")
 	}
 	if got.Name != "web" || got.Namespace != "shop" || got.Generation != 7 || got.Labels["app"] != "shop" {
 		t.Fatalf("name, namespace, generation and labels must stay: %+v", got.ObjectMeta)

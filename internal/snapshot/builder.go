@@ -13,6 +13,7 @@ import (
 	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 )
@@ -27,25 +28,22 @@ const (
 // HTTPRouteGVK is the Gateway API HTTPRoute.
 var HTTPRouteGVK = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 
-// NewRouteMetadata returns an empty metadata-only HTTPRoute, the object the
-// cache watches routes as: the snapshot needs names and labels, nothing else.
-func NewRouteMetadata() *metav1.PartialObjectMetadata {
-	m := &metav1.PartialObjectMetadata{}
-	m.SetGroupVersionKind(HTTPRouteGVK)
-	return m
-}
-
 // StripRoute is the cache transform for HTTPRoutes (§3): keep name,
-// namespace, labels and generation; drop managedFields and annotations.
+// namespace, labels, generation and spec.parentRefs; drop managedFields,
+// annotations, the rest of the spec and the status. One typed watch serves
+// the snapshot (labels) and the controller (parentRefs): controller-runtime
+// keeps one cache per kind.
 func StripRoute(obj any) (any, error) {
-	m, ok := obj.(*metav1.PartialObjectMetadata)
+	r, ok := obj.(*gwapiv1.HTTPRoute)
 	if !ok {
 		return obj, nil
 	}
-	m.ManagedFields = nil
-	m.Annotations = nil
-	m.OwnerReferences = nil
-	return m, nil
+	r.ManagedFields = nil
+	r.Annotations = nil
+	r.OwnerReferences = nil
+	r.Spec = gwapiv1.HTTPRouteSpec{CommonRouteSpec: gwapiv1.CommonRouteSpec{ParentRefs: r.Spec.ParentRefs}}
+	r.Status = gwapiv1.HTTPRouteStatus{}
+	return r, nil
 }
 
 // Builder watches the resources, rebuilds a snapshot on every relevant
@@ -90,7 +88,7 @@ func (b *Builder) trigger() {
 // snapshot and then rebuilds on changes until ctx is done.
 func (b *Builder) Start(ctx context.Context) error {
 	b.init()
-	objs := []client.Object{&mmv1.MaintenanceWindow{}, &mmv1.MaintenancePage{}, &mmv1.MaintenanceService{}, NewRouteMetadata()}
+	objs := []client.Object{&mmv1.MaintenanceWindow{}, &mmv1.MaintenancePage{}, &mmv1.MaintenanceService{}, &gwapiv1.HTTPRoute{}}
 	for _, obj := range objs {
 		inf, err := b.Cache.GetInformer(ctx, obj, cache.BlockUntilSynced(false))
 		if err != nil {
@@ -189,9 +187,8 @@ func (b *Builder) rebuild(ctx context.Context) (time.Time, error) {
 		windows  mmv1.MaintenanceWindowList
 		pages    mmv1.MaintenancePageList
 		services mmv1.MaintenanceServiceList
-		routes   metav1.PartialObjectMetadataList
+		routes   gwapiv1.HTTPRouteList
 	)
-	routes.SetGroupVersionKind(HTTPRouteGVK.GroupVersion().WithKind("HTTPRouteList"))
 	inNS := client.InNamespace(b.Namespace)
 	for _, l := range []struct {
 		list client.ObjectList
@@ -205,7 +202,7 @@ func (b *Builder) rebuild(ctx context.Context) (time.Time, error) {
 	in := Input{Windows: windows.Items, Pages: pages.Items, Services: services.Items, Bypass: b.Bypass, Now: now}
 	in.Routes = make([]RouteInfo, 0, len(routes.Items))
 	for _, r := range routes.Items {
-		in.Routes = append(in.Routes, RouteInfo{Key: RouteKey{Namespace: r.Namespace, Name: r.Name}, Labels: r.Labels})
+		in.Routes = append(in.Routes, RouteInfo{Key: RouteKey{Namespace: r.Namespace, Name: r.Name}, Labels: r.Labels, Parents: r.Spec.ParentRefs})
 	}
 	t0 := time.Now()
 	snap := Build(in)

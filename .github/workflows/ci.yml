@@ -200,6 +200,11 @@ jobs:
             tools/actionlint/go.sum
       - name: go test -race
         run: go test -race ./...
+      - name: envtest (controller against a real API server)
+        run: |
+          # setup-envtest downloads the Kubernetes 1.36 apiserver and etcd.
+          assets=$(scripts/dev/t setup-envtest use 1.36.x -p path)
+          KUBEBUILDER_ASSETS="$assets" go test -count=1 -tags envtest ./internal/controller/...
       - name: Check() benchmark gate (≤ 2 allocs/op, < 50 µs/op)
         env:
           MM_BENCH_GATE: "1"
