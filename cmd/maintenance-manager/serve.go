@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -26,6 +29,7 @@ import (
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 	"github.com/prosperity-solutions/maintenance-manager/internal/authz"
 	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
+	"github.com/prosperity-solutions/maintenance-manager/internal/editor"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -34,14 +38,17 @@ type serveConfig struct {
 	Namespace      string        // release namespace (POD_NAMESPACE)
 	ArmingLeadTime time.Duration // how long before a phase the routes are armed
 	MetricsAddr    string
+	EditorAddr     string
 	Bypass         string // MM_BYPASS_TOKEN; empty disables the bypass
+	EditorPassword string // MM_EDITOR_PASSWORD; empty turns the editor off
 }
 
 func parseServe(args []string) (serveConfig, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	cfg := serveConfig{Namespace: os.Getenv("POD_NAMESPACE"), Bypass: os.Getenv("MM_BYPASS_TOKEN")}
+	cfg := serveConfig{Namespace: os.Getenv("POD_NAMESPACE"), Bypass: os.Getenv("MM_BYPASS_TOKEN"), EditorPassword: os.Getenv("MM_EDITOR_PASSWORD")}
 	fs.DurationVar(&cfg.ArmingLeadTime, "arming-lead-time", 15*time.Minute, "arm routes this long before a dated phase starts")
 	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", ":8081", "metrics and health address (/metrics, /healthz, /readyz)")
+	fs.StringVar(&cfg.EditorAddr, "editor-addr", editor.Addr, "editor address (HTTP basic auth, user admin)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -144,6 +151,41 @@ func serve(args []string, log *slog.Logger) int {
 	}
 	if err := mgr.Add(ctl); err != nil {
 		log.Error("serve: add controller", "err", err)
+		return 1
+	}
+	// The served ListenerSet kinds change rarely; asking the mapper on every
+	// dashboard load would trigger discovery for an unserved group each time.
+	var kindsMu sync.Mutex
+	var kinds []*unstructured.UnstructuredList
+	var kindsAt time.Time
+	listenerSetKinds := func() ([]*unstructured.UnstructuredList, error) {
+		kindsMu.Lock()
+		defer kindsMu.Unlock()
+		if kinds == nil || time.Since(kindsAt) > 10*time.Minute {
+			k, err := controller.ListenerSetKinds(mgr.GetRESTMapper())
+			if err != nil {
+				return nil, err
+			}
+			kinds, kindsAt = k, time.Now()
+		}
+		return kinds, nil
+	}
+	ed := &editor.Server{
+		Addr: cfg.EditorAddr, Namespace: cfg.Namespace, Password: cfg.EditorPassword,
+		Client: mgr.GetClient(), API: mgr.GetAPIReader(), Lead: cfg.ArmingLeadTime, Log: log.With("component", "editor"),
+		// The editor reads what the controller sees through the API, not the
+		// leader's caches, so every replica shows the same picture.
+		View: func(ctx context.Context) (controller.View, error) {
+			ls, err := listenerSetKinds()
+			if err != nil {
+				return controller.View{}, err
+			}
+			rec := &controller.Reconciler{Namespace: cfg.Namespace, Lead: cfg.ArmingLeadTime, Shared: mgr.GetCache(), Leader: mgr.GetAPIReader(), ListenerSets: ls, Log: log}
+			return rec.View(ctx)
+		},
+	}
+	if err := mgr.Add(ed); err != nil {
+		log.Error("serve: add editor", "err", err)
 		return 1
 	}
 	builder := &snapshot.Builder{

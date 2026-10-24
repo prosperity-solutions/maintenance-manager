@@ -1,0 +1,30 @@
+{{template "head" .}}
+{{with .D}}
+<h1>{{if .New}}New window{{else}}Window {{.Name}}{{end}}</h1>
+{{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
+{{template "problems" .All}}
+{{if .Warnings}}<div class="box warn"><strong>Warnings:</strong><ul>{{range .Warnings}}<li>{{.Field}}: {{.Message}}</li>{{end}}</ul></div>{{end}}
+<form method="post" action="{{if .New}}/windows/-/new{{else}}/windows/{{esc .Name}}{{end}}">
+<input type="hidden" name="tz"><input type="hidden" name="formTz" value="{{.FormTz}}"><input type="hidden" name="resourceVersion" value="{{.RV}}">
+{{if .New}}<p><label>Name <input name="name" value="{{.Name}}" required></label>{{template "fielderr" index .Errors "name"}} <span class="muted">cannot be changed later</span></p>{{end}}
+<p><label><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}}> Enabled</label>
+<label>Ends at <input type="datetime-local" step="1" name="endsAt" value="{{.EndsAt}}"></label><input type="hidden" name="endsAtWas" value="{{.EndsAtWas}}">
+<span class="muted">times in {{.FormTz}}{{if .EndsAtDisplay}}: {{.EndsAtDisplay}}{{end}}</span>{{template "fielderr" index .Errors "endsAt"}}</p>
+{{if .Reopen}}<p class="warn"><label><input type="checkbox" name="reopen"> Reopen this ended window</label>{{template "fielderr" index .Errors "reopen"}}</p>{{end}}
+{{range $p := .Phases}}<fieldset><legend>Phase</legend>
+<label>Order <input name="p{{$p.I}}.order" value="{{$p.Order}}" size="3"></label>
+<label>Name <input name="p{{$p.I}}.name" value="{{$p.Name}}" size="20"></label>
+<label>Starts at <input type="datetime-local" step="1" name="p{{$p.I}}.startsAt" value="{{$p.StartsAt}}"></label><input type="hidden" name="p{{$p.I}}.startsAtWas" value="{{$p.StartsAtWas}}">
+<label>Action <select name="p{{$p.I}}.action">{{range $.D.Actions}}<option{{if eq . $p.Action}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+{{if $p.Display}}<span class="muted">{{$p.Display}}</span>{{end}}
+{{range $f := (printf "p%d.order p%d.name p%d.startsAt p%d.action" $p.I $p.I $p.I $p.I | fields)}}{{template "fielderr" index $.D.Errors $f}}{{end}}
+{{range $r := $p.Routings}}<div>Routing: <label>Services <select multiple size="3" name="p{{$p.I}}.r{{$r.J}}.services">{{range $r.Services}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (missing){{end}}</option>{{end}}</select></label>
+<label>Page <select name="p{{$p.I}}.r{{$r.J}}.page">{{range $r.Pages}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (missing){{end}}</option>{{end}}</select></label>
+{{template "fielderr" index $.D.Errors (printf "p%d.r%d.services" $p.I $r.J)}}</div>{{end}}
+</fieldset>{{end}}
+<p class="muted">Phase 0 without a start time starts when the window is enabled; a later phase without one is pending. Clear a phase's name, start time and services to drop it.</p>
+<button>Save</button>
+</form>
+{{if not .New}}<form method="post" action="/windows/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete window</button></p></form>{{end}}
+{{end}}
+{{template "foot" .}}

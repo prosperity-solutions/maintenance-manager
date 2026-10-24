@@ -1,0 +1,35 @@
+{{template "head" .}}
+<h1>Dashboard</h1>
+{{if .D.ViewErr}}<p class="warn">Armed routes, conflicts and Envoy status are unavailable right now: {{.D.ViewErr}}</p>{{end}}
+{{if not .D.Windows}}<p class="muted">No maintenance windows yet. <a href="/windows/-/new">Create one</a>.</p>{{end}}
+{{range .D.Windows}}
+<div class="box">
+<h2><a href="/windows/{{esc .Name}}">{{.Name}}</a> <span class="state state-{{.State}}">{{.State}}</span></h2>
+{{if .Problems}}<p class="err">Invalid, so never armed: {{range .Problems}}{{.Field}}: {{.Message}}; {{end}}</p>{{end}}
+<p>{{if .Active}}Active phase: <strong>{{.Active}}</strong>. {{end}}{{if .Ends}}Ends {{.Ends}}.{{else}}No end time: runs until disabled.{{end}}</p>
+<table><tr><th>Phase</th><th>Action</th><th>Starts</th></tr>
+{{range .Phases}}<tr{{if .Active}} class="err"{{end}}><td>{{.Name}}{{if .Active}} (active){{end}}</td><td>{{.Action}}</td><td>{{.Starts}}</td></tr>{{end}}
+</table>
+<p>
+<form class="inline" method="post" action="/windows/{{esc .Name}}/enabled">
+<input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}">
+{{if .Enabled}}<input type="hidden" name="enabled" value="off"><button>Disable now</button>{{else}}<input type="hidden" name="enabled" value="on"><button>Enable</button>{{end}}
+</form>
+{{if ge .Next 0}}
+<form class="inline" method="post" action="/windows/{{esc .Name}}/next">
+<input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><input type="hidden" name="phase" value="{{.Next}}">
+<button>Start next phase now: {{.NextName}}</button>
+</form>
+{{end}}
+</p>
+{{if .Routes}}
+<table><tr><th>Route</th><th>Armed</th><th>Envoy Accepted</th><th>Conflicts</th></tr>
+{{range .Routes}}<tr><td>{{.Namespace}}/{{.Name}}</td>
+<td>{{if eq .Armed "yes"}}<span class="ok">yes</span>{{else if eq .Armed "pending"}}<span class="warn">pending</span> <span class="muted">the controller has not attached it yet</span>{{else}}<span class="muted">no</span>{{end}}</td>
+<td>{{if eq .Accepted "yes"}}<span class="ok">yes</span>{{else if eq .Accepted "no"}}<span class="err">no</span> <span class="muted">{{.AcceptedWhy}}</span>{{else}}<span class="muted">–</span>{{end}}</td>
+<td>{{range .Conflicts}}<div class="err">{{.}}</div>{{end}}</td></tr>{{end}}
+</table>
+{{else if or (eq .State "armed") (eq .State "active")}}<p class="muted">No routes match this window's services.</p>{{end}}
+</div>
+{{end}}
+{{template "foot" .}}

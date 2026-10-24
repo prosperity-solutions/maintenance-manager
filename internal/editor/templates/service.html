@@ -1,0 +1,25 @@
+{{template "head" .}}
+{{with .D}}
+<h1>{{if .New}}New service{{else}}Service {{.Name}}{{end}}</h1>
+{{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
+{{template "problems" .All}}
+<form method="post" action="{{if .New}}/services/-/new{{else}}/services/{{esc .Name}}{{end}}">
+<input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}">
+{{if .New}}<p><label>Name <input name="name" value="{{.Name}}" required></label>{{template "fielderr" index .Errors "name"}} <span class="muted">cannot be changed later</span></p>{{end}}
+<fieldset><legend>Route labels (all must match)</legend>
+{{range $k, $r := .Rows}}<div><label>Key <input name="sel{{$k}}.key" value="{{$r.Key}}"></label><label>Value <input name="sel{{$k}}.value" value="{{$r.Value}}"></label>{{template "fielderr" index $.D.Errors (printf "sel%d.key" $k)}}</div>{{end}}
+<p class="muted">Clear a row's key and value to drop it.</p>
+{{if .Expressions}}<p>Also matchExpressions (edit with kubectl; kept on save): <code>{{.Expressions}}</code></p>{{end}}
+</fieldset>
+<button>Save</button>
+</form>
+{{if not .New}}
+<h2>Matched routes</h2>
+{{if .RoutesErr}}<p class="warn">{{.RoutesErr}}</p>{{end}}
+<table><tr><th>Route</th><th>Hostnames</th><th>Conflicts</th></tr>
+{{range .Routes}}<tr><td>{{.Namespace}}/{{.Name}}</td><td>{{range .Hostnames}}{{.}} {{end}}</td><td>{{range .Conflicts}}<div class="err">{{.}}</div>{{end}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No HTTPRoute matches.</td></tr>{{end}}
+</table>
+<form method="post" action="/services/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete service</button></p></form>
+{{end}}
+{{end}}
+{{template "foot" .}}

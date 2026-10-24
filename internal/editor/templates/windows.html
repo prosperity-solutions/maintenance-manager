@@ -1,0 +1,7 @@
+{{template "head" .}}
+<h1>Windows</h1>
+<p><a href="/windows/-/new">New window</a></p>
+<table><tr><th>Name</th><th>State</th></tr>
+{{range .D}}<tr><td><a href="/windows/{{esc .Name}}">{{.Name}}</a></td><td><span class="state state-{{.State}}">{{.State}}</span></td></tr>{{else}}<tr><td colspan="2" class="muted">None yet.</td></tr>{{end}}
+</table>
+{{template "foot" .}}

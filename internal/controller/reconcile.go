@@ -35,8 +35,8 @@ type Reconciler struct {
 	Log       *slog.Logger
 	Now       func() time.Time
 
-	// ListenerSets are the ListenerSet / XListenerSet lists to read, one per
-	// served kind.
+	// ListenerSets name the ListenerSet / XListenerSet list kinds to read, one
+	// per served kind (only their GroupVersionKind is used).
 	ListenerSets []*unstructured.UnstructuredList
 }
 
@@ -145,7 +145,10 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 	for _, g := range gateways.Items {
 		in.GatewayLabels[types.NamespacedName{Namespace: g.Namespace, Name: g.Name}] = g.Labels
 	}
-	for _, l := range r.ListenerSets {
+	for _, kind := range r.ListenerSets {
+		// A fresh list per read: the editor calls View from concurrent requests.
+		l := &unstructured.UnstructuredList{}
+		l.SetGroupVersionKind(kind.GroupVersionKind())
 		if err := r.Leader.List(ctx, l); err != nil {
 			return Input{}, Actual{}, ex, err
 		}

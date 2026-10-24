@@ -5,3 +5,6 @@ cmd/maintenance-manager/kodata/
 .claude/worktrees/
 .claude/settings.local.json
 .DS_Store
+
+# go build ./cmd/... output
+/maintenance-manager

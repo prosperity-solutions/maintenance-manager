@@ -1,0 +1,7 @@
+{{template "head" .}}
+<h1>Services</h1>
+<p><a href="/services/-/new">New service</a></p>
+<table><tr><th>Name</th><th>Selector</th></tr>
+{{range .D}}<tr><td><a href="/services/{{esc .Name}}">{{.Name}}</a></td><td>{{range $k, $v := .Spec.RouteSelector.MatchLabels}}{{$k}}={{$v}} {{end}}{{if .Spec.RouteSelector.MatchExpressions}}(+ expressions){{end}}</td></tr>{{else}}<tr><td colspan="2" class="muted">None yet.</td></tr>{{end}}
+</table>
+{{template "foot" .}}

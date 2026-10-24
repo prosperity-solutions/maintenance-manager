@@ -75,6 +75,9 @@ spec:
                 secretKeyRef:
                   name: {{ include "mm.editorSecret" . }}
                   key: editor-password
+                  # A missing key turns the editor off (logged) instead of
+                  # keeping the pod, and authz with it, from starting.
+                  optional: true
             - name: MM_BYPASS_TOKEN
               valueFrom:
                 secretKeyRef:

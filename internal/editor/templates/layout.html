@@ -1,0 +1,39 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maintenance-manager</title>
+<style>
+:root{color-scheme:light dark;--fg:#1d1d1f;--bg:#fff;--muted:#6b6b70;--line:#d8d8dc;--red:#c62828;--green:#2e7d32;--amber:#a15c00;--accent:#2952cc}
+@media (prefers-color-scheme:dark){:root{--fg:#e8e8ea;--bg:#161618;--muted:#9a9aa0;--line:#38383c;--red:#ef6b6b;--green:#6cc070;--amber:#e0a040;--accent:#7f9dff}}
+*{box-sizing:border-box}body{margin:0 auto;max-width:72rem;padding:1rem;font:15px/1.45 system-ui,sans-serif;color:var(--fg);background:var(--bg)}
+nav{display:flex;flex-wrap:wrap;gap:1rem;align-items:center;border-bottom:1px solid var(--line);padding-bottom:.6rem;margin-bottom:1rem}
+nav a{color:var(--accent);text-decoration:none;font-weight:600}nav .zone{margin-left:auto;color:var(--muted);font-size:.85em}
+a{color:var(--accent)}h1{font-size:1.4rem}h2{font-size:1.15rem;margin:1.4rem 0 .4rem}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:.35rem .5rem;text-align:left;vertical-align:top}
+fieldset{border:1px solid var(--line);border-radius:.4rem;margin:.6rem 0;padding:.6rem .8rem}legend{color:var(--muted)}
+label{display:inline-block;margin:.2rem .8rem .2rem 0}input,select,textarea,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:.3rem;padding:.25rem .4rem}
+textarea{width:100%;font-family:ui-monospace,monospace;font-size:.85em}button{cursor:pointer;border-color:var(--accent);color:var(--accent)}
+.err{color:var(--red)}.warn{color:var(--amber)}.ok{color:var(--green)}.muted{color:var(--muted)}
+.state{display:inline-block;padding:0 .45rem;border-radius:.3rem;border:1px solid currentColor;font-size:.85em}
+.state-active{color:var(--red)}.state-armed{color:var(--amber)}.state-invalid{color:var(--red)}.state-idle,.state-ended{color:var(--muted)}
+.inline{display:inline}.box{border:1px solid var(--line);border-radius:.4rem;padding:.6rem .8rem;margin:.6rem 0}
+</style>
+</head>
+<body>
+<nav>
+<a href="/">Dashboard</a><a href="/windows">Windows</a><a href="/services">Services</a><a href="/pages">Pages</a>
+<form class="zone" method="post" action="/tz">Times in {{.Zone}} <input type="hidden" name="tz"><button>Use my time zone</button></form>
+</nav>
+{{end}}
+
+{{define "foot"}}
+<script>{{.Script}}</script>
+</body>
+</html>
+{{end}}
+
+{{define "problems"}}{{if .}}<div class="box err"><strong>Please fix:</strong><ul>{{range .}}<li>{{.Field}}: {{.Message}}</li>{{end}}</ul></div>{{end}}{{end}}
+
+{{define "fielderr"}}{{range .}}<span class="err"> {{.}}</span>{{end}}{{end}}

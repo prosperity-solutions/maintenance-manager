@@ -3,9 +3,19 @@ Maintenance Manager for Envoy® {{ .Chart.AppVersion }} is installed in {{ .Rele
 Create a MaintenanceService (which routes), a MaintenancePage (what users see)
 and a MaintenanceWindow (when, and what happens) in {{ .Release.Namespace }}.
 Shortly before a window starts, maintenance-manager attaches a SecurityPolicy
-to the matching HTTPRoutes; the editor (port 8080) arrives in a later release.
+to the matching HTTPRoutes.
 Creating or deleting that policy drains the Envoy listener for 60 s: open
 connections (WebSockets too) close gracefully and reconnect.
+
+The editor does all of this in a browser:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mm.name" . }} 8080
+  open http://localhost:8080 (user admin, the password from editor.password
+  or the editor-password key of editor.existingSecret)
+
+Its password lets its holder serve any HTML on every gated app's origin: treat
+it like a deploy credential. After changing it, run
+  kubectl -n {{ .Release.Namespace }} rollout restart deploy/{{ include "mm.name" . }}
 
 Nothing reaches your apps until a MaintenanceWindow is armed. At rest, Envoy
 never calls maintenance-manager, and if it is ever down, traffic flows to your

@@ -29,7 +29,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "password": { "type": "string" },
+        "password": { "type": "string", "pattern": "^(.{12,})?$", "description": "Empty (then existingSecret), or at least 12 characters." },
         "existingSecret": { "type": "string" }
       }
     },

@@ -37,6 +37,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 )
@@ -53,9 +54,10 @@ var egCharts = map[string]string{
 const kindNode = "kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
 
 const (
-	bypassToken = "e2e-bypass-0123456789" // the chart wants at least 16 characters
-	mmNamespace = "maintenance-manager"
-	envoyAddr   = "127.0.0.1:30080" // kind extraPortMappings → Envoy's NodePort (D9)
+	bypassToken    = "e2e-bypass-0123456789" // the chart wants at least 16 characters
+	editorPassword = "e2e-editor-password"   // the chart wants at least 12
+	mmNamespace    = "maintenance-manager"
+	envoyAddr      = "127.0.0.1:30080" // kind extraPortMappings → Envoy's NodePort (D9)
 )
 
 var (
@@ -163,6 +165,9 @@ func setup(ctx context.Context, eg, digest, kubeFile string) error {
 	if err := mmv1.AddToScheme(sch); err != nil {
 		return err
 	}
+	if err := gwapiv1.Install(sch); err != nil {
+		return err
+	}
 	if kc, err = client.New(cfg, client.Options{Scheme: sch}); err != nil {
 		return err
 	}
@@ -207,7 +212,7 @@ func setup(ctx context.Context, eg, digest, kubeFile string) error {
 		}
 		return tool(ctx, "helm", "upgrade", "--install", "mm", filepath.Join(root, "chart"),
 			"--kubeconfig", kubeFile, "-n", mmNamespace, "--create-namespace",
-			"--set", "editor.password=e2e", "--set", "bypass.token="+bypassToken, "--set", "image.repository=kind.local/maintenance-manager",
+			"--set", "editor.password="+editorPassword, "--set", "bypass.token="+bypassToken, "--set", "image.repository=kind.local/maintenance-manager",
 			"--set", "image.tag="+tag, "--set", "image.digest=", "--set", "image.pullPolicy=IfNotPresent",
 			// A reused cluster (MM_E2E_KEEP) may carry fields earlier tests patched.
 			"--force-conflicts",
