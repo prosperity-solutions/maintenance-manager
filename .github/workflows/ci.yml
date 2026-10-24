@@ -273,6 +273,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Fetch modules and tools (with retries)
+        run: scripts/ci/prefetch.sh github.com/caarlos0/svu/v3 github.com/google/go-licenses/v2 github.com/google/ko helm.sh/helm/v4/cmd/helm
       - name: Compute the version
         id: version
         run: |
@@ -321,10 +323,20 @@ jobs:
           KO_DOCKER_REPO: ghcr.io/prosperity-solutions/maintenance-manager
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          ref=$(scripts/dev/t ko build --bare --platform=linux/amd64,linux/arm64 --tags="v$VERSION" \
-            --image-label org.opencontainers.image.source=https://github.com/prosperity-solutions/maintenance-manager \
-            --image-annotation org.opencontainers.image.source=https://github.com/prosperity-solutions/maintenance-manager \
-            ./cmd/maintenance-manager)
+          # One retry: on the first push ever, GHCR refused one of the parallel
+          # SBOM pushes (DENIED) while it created the package. A repeat pushes
+          # the same digests.
+          for attempt in 1 2; do
+            if ref=$(scripts/dev/t ko build --bare --platform=linux/amd64,linux/arm64 --tags="v$VERSION" \
+              --image-label org.opencontainers.image.source=https://github.com/prosperity-solutions/maintenance-manager \
+              --image-annotation org.opencontainers.image.source=https://github.com/prosperity-solutions/maintenance-manager \
+              ./cmd/maintenance-manager); then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then exit 1; fi
+            echo "ko build failed; retrying once in 15 s"
+            sleep 15
+          done
           digest=${ref##*@}
           if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
             echo "ko printed an unexpected reference: $ref"
@@ -416,6 +428,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Fetch modules and tools (with retries)
+        run: scripts/ci/prefetch.sh github.com/google/go-licenses/v2 helm.sh/helm/v4/cmd/helm
       - name: Pull the chart by digest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -508,6 +522,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Fetch modules and tools (with retries)
+        run: scripts/ci/prefetch.sh github.com/google/go-containerregistry/cmd/crane helm.sh/helm/v4/cmd/helm
       - name: Log in to ghcr.io (packages may still be private)
         env:
           GH_TOKEN: ${{ github.token }}

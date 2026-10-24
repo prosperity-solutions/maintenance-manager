@@ -1,0 +1,11 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "RID=$(gh run list --workflow CI --event push --json databaseId --jq '.[0].databaseId'); gh run view \"$RID\""
+    }
+  }
+}

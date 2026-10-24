@@ -36,27 +36,35 @@ fi
 case $cmd in
   *--no-verify*) block "--no-verify skips the lefthook pre-push gate. Fix the pre-pass instead." ;;
 esac
-if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_-])push([^[:alnum:]_-]|$)'; then
-  if printf '%s' "$cmd" | grep -Eiq 'LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE|hookspath'; then
-    block "a push with LEFTHOOK=0, LEFTHOOK_EXCLUDE or core.hooksPath skips the pre-push gate. Fix the pre-pass instead."
-  fi
-  # shellcheck disable=SC2016 # a literal $( and backtick
-  if [ "$bootstrap_done" = 1 ] && printf '%s' "$cmd" | grep -Eq '\$\(|`'; then
-    block "a push in a command with \$( ) or backticks: after the bootstrap, push with a literal branch name (git push -u origin <branch>)."
-  fi
-fi
-
 # One simple command per line: split on ; & | newlines, subshell and
 # substitution openers, drop quotes (so `sh -c 'git push -f'` is seen too) and
 # leading VAR=value assignments and wrapper words.
 # shellcheck disable=SC2016,SC2020 # literal $( and backtick; tr maps three separators to newlines
 segments=$(printf '%s\n' "$cmd" | tr '\n' ';' |
   sed -e 's/\$(/;/g' -e 's/`/;/g' -e 's/[(){}]/;/g' |
-  tr ';&|' '\n\n\n' | tr -d "\"'" |
+  tr ';&|' '\n\n\n' | tr -d "\"'\\\\" |
   sed -E -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' \
     -e ':a' -e 's/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]*//' \
     -e 's/^(command|exec|env|nohup|nice|time|sudo|xargs|rtk proxy|rtk)[[:space:]]+//' -e 'ta' |
   grep -v '^$' || true)
+
+# Skipping the hook: the bare word is enough here, a false positive needs
+# LEFTHOOK=0 or hooksPath in the same command anyway.
+if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_-])push([^[:alnum:]_-]|$)' &&
+  printf '%s' "$cmd" | grep -Eiq 'LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE|hookspath'; then
+  block "a push with LEFTHOOK=0, LEFTHOOK_EXCLUDE or core.hooksPath skips the pre-push gate. Fix the pre-pass instead."
+fi
+# A substitution or backtick in a command that runs git push: only when git and
+# push really belong together (not `gh run list --event push`). Matched on the
+# whole text with quotes and backslashes dropped and each $(...) or `...`
+# collapsed to one token, so `git -C "$(pwd)" push` is still seen.
+# shellcheck disable=SC2016 # a literal $( and backtick
+if [ "$bootstrap_done" = 1 ] && printf '%s' "$cmd" | grep -Eq '\$\(|`'; then
+  flat=$(printf '%s\n' "$cmd" | tr '\n' ' ' | tr -d "\"'\\\\" | sed -E -e 's/\$\([^)]*\)/X/g' -e 's/`[^`]*`/X/g')
+  if printf '%s\n' "$flat" | grep -Eq '(^|[[:space:];&|(/])git([[:space:]]+[^[:space:];&|]+)*[[:space:]]+push([[:space:]]|$)'; then
+    block "a push in a command with \$( ) or backticks: after the bootstrap, push with a literal branch name (git push -u origin <branch>)."
+  fi
+fi
 
 # Each segment yields at most one verdict line:
 #   BLOCK <reason>    block now
