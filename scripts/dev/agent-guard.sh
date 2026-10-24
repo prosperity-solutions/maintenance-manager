@@ -36,16 +36,6 @@ fi
 case $cmd in
   *--no-verify*) block "--no-verify skips the lefthook pre-push gate. Fix the pre-pass instead." ;;
 esac
-if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_-])push([^[:alnum:]_-]|$)'; then
-  if printf '%s' "$cmd" | grep -Eiq 'LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE|hookspath'; then
-    block "a push with LEFTHOOK=0, LEFTHOOK_EXCLUDE or core.hooksPath skips the pre-push gate. Fix the pre-pass instead."
-  fi
-  # shellcheck disable=SC2016 # a literal $( and backtick
-  if [ "$bootstrap_done" = 1 ] && printf '%s' "$cmd" | grep -Eq '\$\(|`'; then
-    block "a push in a command with \$( ) or backticks: after the bootstrap, push with a literal branch name (git push -u origin <branch>)."
-  fi
-fi
-
 # One simple command per line: split on ; & | newlines, subshell and
 # substitution openers, drop quotes (so `sh -c 'git push -f'` is seen too) and
 # leading VAR=value assignments and wrapper words.
@@ -57,6 +47,18 @@ segments=$(printf '%s\n' "$cmd" | tr '\n' ';' |
     -e ':a' -e 's/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]*//' \
     -e 's/^(command|exec|env|nohup|nice|time|sudo|xargs|rtk proxy|rtk)[[:space:]]+//' -e 'ta' |
   grep -v '^$' || true)
+
+# Checks that need the whole text, but only when some segment runs git push
+# (not when "push" is just a word, e.g. `gh run list --event push`).
+if printf '%s\n' "$segments" | grep -Eq '(^|[[:space:]/])git([[:space:]]+[^[:space:]]+)*[[:space:]]+push([[:space:]]|$)'; then
+  if printf '%s' "$cmd" | grep -Eiq 'LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE|hookspath'; then
+    block "a push with LEFTHOOK=0, LEFTHOOK_EXCLUDE or core.hooksPath skips the pre-push gate. Fix the pre-pass instead."
+  fi
+  # shellcheck disable=SC2016 # a literal $( and backtick
+  if [ "$bootstrap_done" = 1 ] && printf '%s' "$cmd" | grep -Eq '\$\(|`'; then
+    block "a push in a command with \$( ) or backticks: after the bootstrap, push with a literal branch name (git push -u origin <branch>)."
+  fi
+fi
 
 # Each segment yields at most one verdict line:
 #   BLOCK <reason>    block now
