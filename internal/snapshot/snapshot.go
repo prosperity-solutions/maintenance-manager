@@ -188,7 +188,7 @@ func Build(in Input) *Snapshot {
 		}
 		fillRetryAfter(route.Timeline)
 		for i, d := range route.Timeline {
-			k := decisionKey{d.Window, d.Phase, d.Page, d.From, d.To, d.Until, d.RetryAfter}
+			k := decisionKey{d.Window, d.Phase, d.Page, nanos(d.From), nanos(d.To), nanos(d.Until), nanos(d.RetryAfter)}
 			if shared, ok := interned[k]; ok {
 				route.Timeline[i] = shared
 			} else {
@@ -201,11 +201,20 @@ func Build(in Input) *Snapshot {
 }
 
 // decisionKey identifies a decision's content; equal keys mean equal
-// responses. Times are compared as instants (all are UTC).
+// responses. Times are instants (UnixNano), so a monotonic reading or a
+// Location can never make equal instants unequal keys.
 type decisionKey struct {
 	window, phase               string
 	page                        *Page
-	from, to, until, retryAfter time.Time
+	from, to, until, retryAfter int64
+}
+
+// nanos is t as UnixNano, with the zero time (= open) as 0.
+func nanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }
 
 // until is the end of the window's current phase: the next phase's start or

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -109,6 +110,10 @@ func serve(args []string, log *slog.Logger) int {
 		GracefulShutdownTimeout: ptrTo(25 * time.Second),
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "HTTPRoute") {
+			log.Error("serve: the cluster does not serve gateway.networking.k8s.io/v1 HTTPRoute. maintenance-manager needs Envoy Gateway >= 1.8, which installs the Gateway API; install it first", "err", err)
+			return 1
+		}
 		log.Error("serve: manager", "err", err)
 		return 1
 	}

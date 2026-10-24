@@ -258,6 +258,7 @@ func TestCookieValue(t *testing.T) {
 		{"a=1;mm_seen_x=abc", "abc"},
 		{"xmm_seen_x=abc", ""},
 		{"xmm_seen_x=no; mm_seen_x=yes", "yes"},
+		{"a=1,mm_seen_x=abc", "abc"},
 		{"", ""},
 	}
 	for _, tc := range cases {
@@ -346,6 +347,9 @@ func TestCheckMorePaths(t *testing.T) {
 	}
 	if resp, _ := s.Check(t.Context(), noRoute(map[string]string{bypassHeader: "x"})); statusOf(resp) != 0 || !stripsBypass(resp) {
 		t.Fatal("no route metadata with a bypass header: pass, header stripped")
+	}
+	if resp, _ := s.Check(t.Context(), req{path: "//__maintenance-manager/status"}.build()); statusOf(resp) != 200 {
+		t.Fatal("an unnormalized status path still answers")
 	}
 	if resp, _ := s.Check(t.Context(), req{path: "/x?y=1", headers: map[string]string{"accept": browser}}.build()); statusOf(resp) != 503 {
 		t.Fatal("a query string must not hide the block")

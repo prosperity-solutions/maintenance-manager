@@ -108,7 +108,8 @@ func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.Che
 	now := s.now()
 	d := at(timeline, now)
 
-	if path == statusPath {
+	// "//__maintenance-manager/status" too, in case :path was not normalized.
+	if path == statusPath || (len(path) > len(statusPath) && strings.TrimLeft(path, "/") == statusPath[1:]) {
 		return statusFor(d, http.GetMethod(), query, headers["accept-language"], bypass), nil
 	}
 	if bypass || d == nil {
@@ -199,7 +200,8 @@ func cookieValue(header, prefix string) string {
 		if i < 0 {
 			return ""
 		}
-		if i == 0 || header[i-1] == ' ' || header[i-1] == ';' {
+		// ",": Envoy joins repeated Cookie headers with a comma.
+		if i == 0 || header[i-1] == ' ' || header[i-1] == ';' || header[i-1] == ',' {
 			v := header[i+len(prefix):]
 			if j := strings.IndexByte(v, ';'); j >= 0 {
 				v = v[:j]

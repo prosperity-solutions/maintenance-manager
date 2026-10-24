@@ -91,7 +91,7 @@ func (b *Builder) Start(ctx context.Context) error {
 	b.init()
 	objs := []client.Object{&mmv1.MaintenanceWindow{}, &mmv1.MaintenancePage{}, &mmv1.MaintenanceService{}, NewRouteMetadata()}
 	for _, obj := range objs {
-		inf, err := b.Cache.GetInformer(ctx, obj)
+		inf, err := b.Cache.GetInformer(ctx, obj, cache.BlockUntilSynced(false))
 		if err != nil {
 			return fmt.Errorf("snapshot: informer for %T: %w", obj, err)
 		}
@@ -107,11 +107,19 @@ func (b *Builder) Start(ctx context.Context) error {
 			return fmt.Errorf("snapshot: event handler for %T: %w", obj, err)
 		}
 	}
-	if !b.Cache.WaitForCacheSync(ctx) {
+	// Wait for the caches, and say so while waiting: missing RBAC on
+	// httproutes or an API outage at boot would otherwise hang silently.
+	for {
+		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		synced := b.Cache.WaitForCacheSync(wctx)
+		cancel()
+		if synced {
+			break
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
-		return fmt.Errorf("snapshot: caches did not sync")
+		b.Log.Warn("caches have not synced after 30 s; not ready yet. Check RBAC on httproutes (cluster-wide list/watch) and on our resources, and the API server")
 	}
 
 	timer := time.NewTimer(0) // the first build, right away
@@ -137,7 +145,7 @@ func (b *Builder) Start(ctx context.Context) error {
 			}
 			// Wake when a window ends, so ended windows leave the snapshot.
 			if !next.IsZero() {
-				resetTimer(timer, time.Until(next)+10*time.Millisecond)
+				resetTimer(timer, next.Sub(b.now())+10*time.Millisecond)
 			}
 		}
 	}

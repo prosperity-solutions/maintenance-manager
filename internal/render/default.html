@@ -26,9 +26,10 @@ a:hover,a:focus{background:var(--accent);color:var(--bg)}
 {{if .Interstitial}}<p><a href="">Continue</a></p>{{end}}
 </main>
 <script>
-(function(){try{var f=new Intl.DateTimeFormat(undefined,{hour:"2-digit",minute:"2-digit",timeZoneName:"short"});
-document.querySelectorAll("time[datetime]").forEach(function(t){var d=new Date(t.getAttribute("datetime"));
-if(!isNaN(d))t.textContent=f.format(d)})}catch(e){}})();
+(function(){try{var l=document.documentElement.lang||undefined,n=new Date();
+document.querySelectorAll("time[datetime]").forEach(function(t){var d=new Date(t.getAttribute("datetime"));if(isNaN(d))return;
+var o={hour:"2-digit",minute:"2-digit",timeZoneName:"short"};if(d.toDateString()!==n.toDateString()){o.month="short";o.day="numeric"}
+t.textContent=new Intl.DateTimeFormat(l,o).format(d)})}catch(e){}})();
 </script>
 </body>
 </html>
