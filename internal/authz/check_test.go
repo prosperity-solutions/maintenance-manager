@@ -379,7 +379,7 @@ func TestRenderFallback(t *testing.T) {
 	// falls back to the built-in page for that locale only.
 	page := mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Spec: mmv1.MaintenancePageSpec{
 		FallbackLocale: "en",
-		HTML:           `<p>{{if eq .Locale "de"}}{{index .Title 99999}}{{end}}custom {{.Title}}</p>`,
+		HTML:           `<p>{{if eq .Locale "de"}}{{lt .Title 1}}{{end}}custom {{.Title}}</p>`,
 		Locales:        map[string]mmv1.PageText{"en": {Title: "Back soon"}, "de": {Title: "Gleich zurück"}},
 	}}
 	svc := mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Name: "shop"},

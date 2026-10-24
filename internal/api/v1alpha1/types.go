@@ -56,7 +56,11 @@ type MaintenancePageSpec struct {
 	FallbackLocale string `json:"fallbackLocale"`
 
 	// HTML is a Go html/template with .Title, .Message, .Locale, .Until and
-	// .Interstitial. Empty means the built-in default page.
+	// .Interstitial. Empty means the built-in default page. Only a safe subset
+	// is allowed: text, {{.Field}}, if/else, with, and the functions eq, ne,
+	// lt, le, gt, ge, and, or, not and len; no range, template, define, block,
+	// variables or other functions. A page outside it is invalid and visitors
+	// get the built-in page.
 	// +optional
 	// +kubebuilder:validation:MaxLength=65536
 	HTML string `json:"html,omitempty"`
