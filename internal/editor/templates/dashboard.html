@@ -13,8 +13,9 @@
 <p>
 <form class="inline" method="post" action="/windows/{{esc .Name}}/enabled">
 <input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}">
-{{if .Enabled}}<input type="hidden" name="enabled" value="off"><button>Disable now</button>{{else}}<input type="hidden" name="enabled" value="on"><button>Enable</button>{{end}}
+{{if .Enabled}}<input type="hidden" name="enabled" value="off"><button>Disable now</button>{{else}}<input type="hidden" name="enabled" value="on"><button>Enable{{if .EnableStarts}}: phase {{.EnableStarts}} starts at once{{end}}</button>{{end}}
 </form>
+{{if and (not .Enabled) .EnableStarts}}<span class="muted">To start at a later phase instead, set its start time in the <a href="/windows/{{esc .Name}}">window</a> and enable it there in one save.</span>{{end}}
 {{if ge .Next 0}}
 <form class="inline" method="post" action="/windows/{{esc .Name}}/next">
 <input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><input type="hidden" name="phase" value="{{.Next}}">

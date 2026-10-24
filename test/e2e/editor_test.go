@@ -83,9 +83,6 @@ func TestE11Editor(t *testing.T) {
 	if r.status != http.StatusOK || !strings.Contains(r.body, "Dashboard") {
 		t.Fatalf("the editor must answer through Envoy: %v", r)
 	}
-	if r := editor(http.MethodGet, "/", nil, func(req *http.Request) { req.SetBasicAuth("admin", "wrong-password") }); r.status != http.StatusUnauthorized {
-		t.Fatalf("a wrong password must get 401: %v", r)
-	}
 
 	svcForm := url.Values{"name": {"e11-svc"}, "sel0.key": {"e2e.maintenance-manager.oss.life.li/app"}, "sel0.value": {"e11-none"}}
 	for name, mod := range map[string]func(*http.Request){
@@ -172,5 +169,10 @@ func TestE11Editor(t *testing.T) {
 	}
 	if err := kc.Get(t.Context(), client.ObjectKey{Namespace: mmNamespace, Name: "e11-svc"}, &svc); err == nil {
 		t.Fatal("the service must be gone")
+	}
+
+	// Last: a wrong guess takes the replica's login slot for a second.
+	if r := editor(http.MethodGet, "/", nil, func(req *http.Request) { req.SetBasicAuth("admin", "wrong-password") }); r.status != http.StatusUnauthorized {
+		t.Fatalf("a wrong password must get 401: %v", r)
 	}
 }

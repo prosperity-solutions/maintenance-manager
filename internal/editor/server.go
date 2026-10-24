@@ -10,13 +10,13 @@ import (
 	"errors"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -174,15 +174,14 @@ func headers(next http.Handler) http.Handler {
 // auth is HTTP basic auth for user admin. Both values are hashed before the
 // constant-time compare, so neither length leaks.
 //
-// Guessing is limited to one attempt per second per replica, checked before
-// the compare: a request with credentials takes the one token, or gets 429 at
-// once without being compared (so a flood learns nothing and parks no
-// goroutines). A correct login gives its token back, so the admin is only
-// slowed while someone is guessing.
+// Guessing is limited before the compare: one attempt per second per client
+// address. Another attempt from that address meanwhile gets 429 at once, not
+// compared and not parked. A correct login gives its slot back. Per address,
+// so a flooding pod cannot lock out the admin's port-forward (127.0.0.1).
 func (s *Server) auth(h http.Handler) http.Handler {
 	want := sha256.Sum256([]byte(s.Password))
 	wantUser := sha256.Sum256([]byte(user))
-	var next atomic.Int64 // unix nanos before which no guess is compared
+	slots := &guessSlots{start: time.Now(), next: map[string]time.Duration{}}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
 		if !ok {
@@ -190,17 +189,15 @@ func (s *Server) auth(h http.Handler) http.Handler {
 			http.Error(w, "login required (user admin)", http.StatusUnauthorized)
 			return
 		}
-		// Take the slot: only one request per second gets compared.
-		now, prev := time.Now().UnixNano(), next.Load()
-		claimed := now + int64(time.Second)
-		if now < prev || !next.CompareAndSwap(prev, claimed) {
+		release, ok := slots.take(clientAddr(r))
+		if !ok {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "too many login attempts; try again in a second", http.StatusTooManyRequests)
 			return
 		}
 		gotUser, got := sha256.Sum256([]byte(u)), sha256.Sum256([]byte(p))
 		if subtle.ConstantTimeCompare(gotUser[:], wantUser[:])&subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
-			next.CompareAndSwap(claimed, prev) // a correct login gives the slot back
+			release()
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -208,6 +205,61 @@ func (s *Server) auth(h http.Handler) http.Handler {
 		w.Header().Set("WWW-Authenticate", `Basic realm="maintenance-manager", charset="UTF-8"`)
 		http.Error(w, "login required (user admin)", http.StatusUnauthorized)
 	})
+}
+
+// maxClients bounds the slot table; when it is full of live slots, new
+// addresses wait for one to expire.
+const maxClients = 4096
+
+// guessSlots hands out one login attempt per second per client address,
+// measured on the monotonic clock.
+type guessSlots struct {
+	mu    sync.Mutex
+	start time.Time
+	next  map[string]time.Duration // address → when its next attempt may start
+}
+
+// take claims the address's slot, or reports false. release gives a slot
+// back after a correct login.
+func (g *guessSlots) take(addr string) (release func(), ok bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Since(g.start)
+	prev, had := g.next[addr]
+	if had && now < prev {
+		return nil, false
+	}
+	if !had && len(g.next) >= maxClients {
+		for a, n := range g.next {
+			if n <= now {
+				delete(g.next, a)
+			}
+		}
+		if len(g.next) >= maxClients {
+			return nil, false
+		}
+	}
+	claimed := now + time.Second
+	g.next[addr] = claimed
+	return func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if g.next[addr] == claimed {
+			if had {
+				g.next[addr] = prev
+			} else {
+				delete(g.next, addr)
+			}
+		}
+	}, true
+}
+
+// clientAddr is the request's peer address without the port.
+func clientAddr(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // csrf lets GET and HEAD through and checks every other request with Go's
@@ -327,6 +379,9 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg st
 // audit writes the one log line per write (§10): object, changed fields,
 // client. Behind a port-forward the client is always 127.0.0.1.
 func (s *Server) audit(r *http.Request, verb, kind, name string, before, after any) {
+	s.viewMu.Lock()
+	s.viewAt = time.Time{} // the next page shows the effect of this write
+	s.viewMu.Unlock()
 	s.Log.Info("editor write", "verb", verb, "kind", kind, "name", name, "fields", changedFields(before, after), "client", r.RemoteAddr)
 }
 

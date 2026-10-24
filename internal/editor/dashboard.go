@@ -31,6 +31,7 @@ type dashWindow struct {
 	Active          string // the active phase's name
 	Next            int    // phase index for "Start next phase now", or -1
 	NextName        string
+	EnableStarts    string // what Enable makes active at once, e.g. "down (block)"
 	Ends            string
 	Phases          []dashPhase
 	Routes          []dashRoute
@@ -86,6 +87,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			State: WindowState(&mw.Spec, now, s.Lead), Next: NextPhase(&mw.Spec, now), Problems: snapshot.ValidateWindow(&mw.Spec)}
 		if mw.Spec.EndsAt != nil {
 			dw.Ends = FormatDisplay(mw.Spec.EndsAt.Time, loc)
+		}
+		if !mw.Spec.Enabled && dw.State != StateInvalid {
+			on := mw.Spec.DeepCopy()
+			on.Enabled = true
+			if a := snapshot.ActivePhase(on, now); a >= 0 {
+				dw.EnableStarts = on.Phases[a].Name + " (" + string(on.Phases[a].Action) + ")"
+			}
 		}
 		active := snapshot.ActivePhase(&mw.Spec, now)
 		if dw.State == StateInvalid {

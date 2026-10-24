@@ -148,16 +148,17 @@ func (s *Server) createWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec, ps := sub.spec, append(sub.problems, nameProblems(name)...)
+	// First, before any time-based check: typed times meant the browser's zone.
+	if browser := zoneMismatch(r, sub.loc); browser != nil {
+		rememberTZ(w, r)
+		s.windowPage(w, r, http.StatusUnprocessableEntity, browser, name, "", true, &spec, ps, zoneNotice(browser, sub.loc), &sub)
+		return
+	}
 	if len(ps) == 0 {
 		ps = append(snapshot.ValidateWindow(&spec), EndsAtProblem(nil, &spec, s.now())...)
 	}
 	if len(ps) > 0 {
 		s.windowPage(w, r, http.StatusUnprocessableEntity, sub.loc, name, "", true, &spec, ps, "", &sub)
-		return
-	}
-	if browser := zoneMismatch(r, sub.loc); browser != nil {
-		rememberTZ(w, r)
-		s.windowPage(w, r, http.StatusUnprocessableEntity, browser, name, "", true, &spec, nil, zoneNotice(browser, sub.loc), nil)
 		return
 	}
 	obj := &mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: name}, Spec: spec}
@@ -182,17 +183,18 @@ func (s *Server) updateWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec, ps := sub.spec, sub.problems
+	// First, before any time-based check: typed times meant the browser's zone.
+	if browser := zoneMismatch(r, sub.loc); browser != nil {
+		rememberTZ(w, r)
+		s.windowPage(w, r, http.StatusUnprocessableEntity, browser, obj.Name, rv, false, &spec, ps, zoneNotice(browser, sub.loc), &sub)
+		return
+	}
 	if len(ps) == 0 {
 		ps = append(snapshot.ValidateWindow(&spec), EndsAtProblem(&obj.Spec, &spec, s.now())...)
 		ps = append(ps, reopenProblem(r, &obj.Spec, &spec, s.now())...)
 	}
 	if len(ps) > 0 {
 		s.windowPage(w, r, http.StatusUnprocessableEntity, sub.loc, obj.Name, rv, false, &spec, ps, "", &sub)
-		return
-	}
-	if browser := zoneMismatch(r, sub.loc); browser != nil {
-		rememberTZ(w, r)
-		s.windowPage(w, r, http.StatusUnprocessableEntity, browser, obj.Name, rv, false, &spec, nil, zoneNotice(browser, sub.loc), nil)
 		return
 	}
 	before := obj.Spec.DeepCopy()

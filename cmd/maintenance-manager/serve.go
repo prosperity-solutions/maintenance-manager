@@ -161,7 +161,7 @@ func serve(args []string, log *slog.Logger) int {
 	listenerSetKinds := func() ([]*unstructured.UnstructuredList, error) {
 		kindsMu.Lock()
 		defer kindsMu.Unlock()
-		if kinds == nil || time.Since(kindsAt) > 10*time.Minute {
+		if kindsAt.IsZero() || time.Since(kindsAt) > 10*time.Minute {
 			k, err := controller.ListenerSetKinds(mgr.GetRESTMapper())
 			if err != nil {
 				return nil, err

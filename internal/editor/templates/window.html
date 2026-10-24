@@ -22,7 +22,7 @@
 <label>Page <select name="p{{$p.I}}.r{{$r.J}}.page">{{range $r.Pages}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (missing){{end}}</option>{{end}}</select></label>
 {{template "fielderr" index $.D.Errors (printf "p%d.r%d.services" $p.I $r.J)}}</div>{{end}}
 </fieldset>{{end}}
-<p class="muted">Phase 0 without a start time starts when the window is enabled; a later phase without one is pending. Clear a phase's name, start time and services to drop it.</p>
+<p class="muted">Ctrl-click (Cmd-click on a Mac) selects several services; a plain click replaces the selection. Phase 0 without a start time starts when the window is enabled; a later phase without one is pending. Clear a phase's name, start time and services to drop it.</p>
 <button>Save</button>
 </form>
 {{if not .New}}<form method="post" action="/windows/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete window</button></p></form>{{end}}

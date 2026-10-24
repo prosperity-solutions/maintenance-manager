@@ -2,11 +2,13 @@ package editor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
@@ -639,4 +642,117 @@ func TestDashboardPendingAndInvalid(t *testing.T) {
 	if strings.Contains(body, "Start next phase now: later") || strings.Contains(body, "Bad Name (active)") {
 		t.Error("an invalid window has no active phase and no Start-next button")
 	}
+}
+
+func TestFloodDoesNotLockOutOtherAddresses(t *testing.T) {
+	s, _ := newServer(t)
+	h := s.Handler()
+	attacker := func(r *http.Request) { r.RemoteAddr = "10.0.0.9:4444"; r.SetBasicAuth("admin", "wrong") }
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() { defer wg.Done(); do(t, h, http.MethodGet, "/", nil, attacker) }()
+	}
+	wg.Wait()
+	portForward := func(r *http.Request) { r.RemoteAddr = "127.0.0.1:5555" }
+	if w := do(t, h, http.MethodGet, "/", nil, portForward); w.Code != http.StatusOK {
+		t.Fatalf("the admin's port-forward must not be locked out by another address: %d", w.Code)
+	}
+}
+
+func TestZoneMismatchComesBeforeTimeChecks(t *testing.T) {
+	s, _ := newServer(t)
+	// 18:00 meant in New York (22:00 UTC) is in the future at 21:00 UTC, but
+	// 18:00 UTC is not: the zone notice must win over "in the past".
+	s.Now = func() time.Time { return time.Date(2026, 11, 2, 21, 0, 0, 0, time.UTC) }
+	form := url.Values{"name": {"w"}, "formTz": {"UTC"}, "tz": {"America/New_York"}, "endsAt": {"2026-11-02T18:00"},
+		"p0.order": {"1"}, "p0.name": {"down"}, "p0.action": {"block"}, "p0.r0.services": {"x"}}
+	w := do(t, s.Handler(), http.MethodPost, "/windows/-/new", form)
+	if !strings.Contains(w.Body.String(), "Nothing is saved yet") {
+		t.Fatalf("want the zone notice first: %d", w.Code)
+	}
+}
+
+// TestGetsNeverWrite: GET skips the CSRF check, so a GET handler that writes
+// would be reachable from any page the admin visits (an <img> carries the
+// cached credentials). Every GET route runs against a client that fails
+// every write.
+func TestGetsNeverWrite(t *testing.T) {
+	start := metav1.NewTime(now.Add(-time.Minute))
+	objs := []client.Object{
+		&mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "w"}, Spec: mmv1.MaintenanceWindowSpec{Enabled: true,
+			Phases: []mmv1.Phase{{Name: "a", StartsAt: &start, Action: mmv1.ActionBlock, Routings: []mmv1.Routing{{Services: []string{"s"}, Page: "p"}}}}}},
+		&mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "s"}, Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"a": "b"}}}},
+		&mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "p"}, Spec: mmv1.MaintenancePageSpec{FallbackLocale: "en", Locales: map[string]mmv1.PageText{"en": {}}}},
+	}
+	s, c := newServer(t, objs...)
+	fail := func() error { return errors.New("a GET handler wrote") }
+	s.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error { return fail() },
+		Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error { return fail() },
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return fail()
+		},
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return fail() },
+	})
+	h := s.Handler()
+	for _, p := range []string{"/", "/services", "/services/-/new", "/services/s", "/pages", "/pages/-/new", "/pages/p",
+		"/pages/p/preview?locale=en&action=block", "/windows", "/windows/-/new", "/windows/w",
+		"/windows/w/enabled", "/windows/w/next", "/windows/w/delete", "/services/s/delete", "/pages/p/delete", "/tz"} {
+		w := do(t, h, http.MethodGet, p, nil)
+		if w.Code >= 500 || strings.Contains(w.Body.String(), "a GET handler wrote") {
+			t.Errorf("GET %s: %d %s", p, w.Code, w.Body)
+		}
+	}
+}
+
+// TestFormsCoverEverySpecField fails when a CRD field is added that the
+// forms do not encode: an editor save replaces the whole spec with what the
+// form decoded, so an unhandled field (one set by GitOps, say) would be
+// wiped on every save. Add it to Encode/Decode and the round-trip tests,
+// then here.
+func TestFormsCoverEverySpecField(t *testing.T) {
+	handled := map[string]bool{
+		"routeSelector.matchLabels": true, "routeSelector.matchExpressions": true,
+		"fallbackLocale": true, "html": true, "locales.title": true, "locales.message": true,
+		"enabled": true, "endsAt": true, "phases.name": true, "phases.startsAt": true, "phases.action": true,
+		"phases.routings.services": true, "phases.routings.page": true,
+	}
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[mmv1.MaintenanceServiceSpec](), reflect.TypeFor[mmv1.MaintenancePageSpec](), reflect.TypeFor[mmv1.MaintenanceWindowSpec](),
+	} {
+		for _, f := range jsonFields(typ, "") {
+			if !handled[f] {
+				t.Errorf("%s.%s is not handled by the editor's forms: a save would wipe it", typ.Name(), f)
+			}
+		}
+	}
+}
+
+// jsonFields lists the JSON paths of a spec type, stopping at types the
+// forms treat as a unit (time, label selector parts, strings, maps of text).
+func jsonFields(t reflect.Type, prefix string) []string {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || t == reflect.TypeFor[metav1.Time]() {
+		return []string{prefix}
+	}
+	if t == reflect.TypeFor[metav1.LabelSelector]() {
+		return []string{prefix + ".matchLabels", prefix + ".matchExpressions"}
+	}
+	var out []string
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		p := name
+		if prefix != "" {
+			p = prefix + "." + name
+		}
+		out = append(out, jsonFields(f.Type, p)...)
+	}
+	return out
 }

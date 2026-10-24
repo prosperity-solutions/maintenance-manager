@@ -33,12 +33,22 @@ kubectl -n <namespace> port-forward svc/maintenance-manager 8080
 ```
 
 Want a URL instead? Point an HTTPRoute of your own at the `maintenance-manager`
-Service, port 8080, and put TLS in front of it.
+Service, port 8080, at path `/` (the editor's links are root-relative), and put
+TLS and your own login (OIDC, an IP allowlist) in front of it. Keep that route
+out of every MaintenanceService's selector, or a block phase blocks the editor
+too.
+
+If the editor is ever out of reach, stop a window from the command line:
+
+```sh
+kubectl -n <namespace> patch mmw <window> --type=merge -p '{"spec":{"enabled":false}}'
+```
 
 > **Treat the editor password like a deploy credential.** Whoever holds it can
 > serve any HTML and JavaScript on every gated app's origin. It must be at least
 > 12 characters (shorter, the editor stays off). Login attempts are limited to
-> one per second per replica while someone is guessing.
+> one per second per client address, so a guessing pod does not lock out your
+> port-forward.
 
 ## Licence
 

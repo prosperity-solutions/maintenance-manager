@@ -26,10 +26,16 @@ produce an attestation that passes this.
   and JavaScript on every gated app's origin. At least 12 characters; with a
   shorter one (possible through `editor.existingSecret`) the editor stays off.
 - **Guessing is rate-limited before the compare:** one attempt per second per
-  replica; any other attempt meanwhile gets `429` at once, without being
-  compared and without holding a connection. A correct login gives its slot
-  back, so the admin is only slowed (an occasional `429`, retry) while someone
-  is guessing.
+  client address; another attempt from that address meanwhile gets `429` at
+  once, without being compared and without holding a connection. A correct
+  login gives its slot back. Per address, so a flooding pod does not lock out
+  a `kubectl port-forward` (127.0.0.1). Behind an HTTPRoute every request
+  comes from Envoy's address, so a public URL needs its own login in front
+  (OIDC, an IP allowlist).
+- **Lock it down further** with a NetworkPolicy that denies ingress to port
+  8080 (port-forward does not pass through NetworkPolicies). If the editor is
+  unreachable, `kubectl patch mmw <window> --type=merge -p '{"spec":{"enabled":false}}'`
+  stops a window.
 - **ClusterIP only:** any pod in the cluster can reach port 8080, so the
   password is the only gate. Reach it with `kubectl port-forward`, or an
   HTTPRoute of your own with TLS.
