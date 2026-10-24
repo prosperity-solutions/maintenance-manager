@@ -20,6 +20,38 @@ The same command with `oci://ghcr.io/prosperity-solutions/charts/maintenance-man
 verifies the chart. A workflow run on any branch other than `main` cannot
 produce an attestation that passes this.
 
+## The editor
+
+- **Its password is a deploy credential:** whoever holds it can serve any HTML
+  and JavaScript on every gated app's origin. At least 12 characters; with a
+  shorter one (possible through `editor.existingSecret`) the editor stays off.
+- **Guessing is rate-limited before the compare:** one attempt per second per
+  client address; another attempt from that address meanwhile gets `429` at
+  once, without being compared and without holding a connection. A correct
+  login gives its slot back. Per address, so a flooding pod does not lock out
+  a `kubectl port-forward` (127.0.0.1). Behind an HTTPRoute every request
+  comes from Envoy's address, so a public URL needs its own login in front
+  (OIDC, an IP allowlist).
+- **Lock it down further** with a NetworkPolicy that denies ingress to port
+  8080 (port-forward does not pass through NetworkPolicies). If the editor is
+  unreachable, `kubectl patch mmw <window> --type=merge -p '{"spec":{"enabled":false}}'`
+  stops a window.
+- **ClusterIP only:** any pod in the cluster can reach port 8080, so the
+  password is the only gate. Reach it with `kubectl port-forward`, or an
+  HTTPRoute of your own with TLS.
+- **Forged requests:** every change is a POST, checked by Go's
+  `CrossOriginProtection` (`Sec-Fetch-Site`, then `Origin`); a POST with none of
+  `Sec-Fetch-Site`, `Origin` and `Referer` is refused too. Pages carry
+  `frame-ancestors 'none'` and a CSP that allows only the one inline script, by
+  hash.
+- **Previews are sandboxed** (`Content-Security-Policy: sandbox`), so a page's
+  own HTML cannot act on the editor's origin.
+- **Page templates are limited to a safe subset** (no loops, no template calls,
+  no functions beyond comparisons), so a page cannot stall the replicas.
+- **Audit:** one JSON log line per write, with the object, the changed fields
+  and the client address. Behind `kubectl port-forward` the address is always
+  `127.0.0.1`.
+
 ## Walls (a hostile PR cannot remove them)
 
 | | threat | wall |

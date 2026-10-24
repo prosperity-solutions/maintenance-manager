@@ -1,0 +1,7 @@
+{{template "head" .}}
+<h1>Pages</h1>
+<p><a href="/pages/-/new">New page</a></p>
+<table><tr><th>Name</th><th>Locales</th><th>Template</th></tr>
+{{range .D}}<tr><td><a href="/pages/{{esc .Name}}">{{.Name}}</a></td><td>{{range $k, $v := .Spec.Locales}}{{$k}} {{end}}</td><td>{{if .Spec.HTML}}custom{{else}}built-in{{end}}</td></tr>{{else}}<tr><td colspan="3" class="muted">None yet.</td></tr>{{end}}
+</table>
+{{template "foot" .}}

@@ -1,0 +1,31 @@
+{{template "head" .}}
+{{with .D}}
+<h1>{{if .New}}New page{{else}}Page {{.Name}}{{end}}</h1>
+{{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
+{{template "problems" .All}}
+<form method="post" action="{{if .New}}/pages/-/new{{else}}/pages/{{esc .Name}}{{end}}">
+<input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}">
+{{if .New}}<p><label>Name <input name="name" value="{{.Name}}" required></label>{{template "fielderr" index .Errors "name"}} <span class="muted">cannot be changed later</span></p>{{end}}
+<p><label>Fallback locale <input name="fallbackLocale" value="{{.FallbackLocale}}" size="8"></label>{{template "fielderr" index .Errors "fallbackLocale"}}</p>
+{{range $k, $r := .Rows}}<fieldset><legend>Locale</legend>
+<label>Tag <input name="l{{$k}}.tag" value="{{$r.Tag}}" size="8" placeholder="de-CH"></label>{{template "fielderr" index $.D.Errors (printf "l%d.tag" $k)}}
+<label>Title</label><textarea name="l{{$k}}.title" rows="1">
+{{$r.Title}}</textarea>
+<div><label>Message</label><textarea name="l{{$k}}.message" rows="2">
+{{$r.Message}}</textarea></div></fieldset>{{end}}
+<p class="muted">Clear a locale's tag, title and message to drop it.</p>
+<p><label>HTML template (empty = built-in page; allowed: text, {{"{{"}}.Title{{"}}"}} .Message .Locale .Until .Interstitial, if/else, with, eq ne lt le gt ge and or not len)</label>{{template "fielderr" index .Errors "html"}}
+<textarea name="html" rows="16">
+{{.HTML}}</textarea></p>
+<p><button>Save</button>
+<label>Preview locale <input name="previewLocale" value="{{.FallbackLocale}}" size="8"></label>
+<select name="previewAction"><option value="block">block</option><option value="interstitial">interstitial</option></select>
+<button formaction="/pages/-/preview" formtarget="_blank">Preview this form</button></p>
+</form>
+{{if not .New}}
+<p>Preview saved page: {{$n := .Name}}{{range .Tags}}<a href="/pages/{{esc $n}}/preview?locale={{.}}&amp;action=block" target="_blank" rel="noopener">{{.}} block</a> · <a href="/pages/{{esc $n}}/preview?locale={{.}}&amp;action=interstitial" target="_blank" rel="noopener">{{.}} interstitial</a> · {{end}}</p>
+<p class="muted">Previews run without scripts, so the built-in page's local-time conversion does not run there.</p>
+<form method="post" action="/pages/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete page</button></p></form>
+{{end}}
+{{end}}
+{{template "foot" .}}

@@ -19,6 +19,37 @@ interstitials and banners** on any Kubernetes® cluster running **Envoy Gateway
 > commands land here as it ships. The full design is in
 > [docs/HANDOVER.md](docs/HANDOVER.md).
 
+## The editor
+
+A plain web editor ships with the chart: a dashboard (which windows are armed or
+active, which routes, whether Envoy accepted the policy, and conflicts in red),
+forms for services, pages and windows, a page preview, and **Start next phase
+now**. It listens on port 8080 inside the cluster only:
+
+```sh
+kubectl -n <namespace> port-forward svc/maintenance-manager 8080
+# open http://localhost:8080, user admin, the password from editor.password
+# (or the editor-password key of editor.existingSecret)
+```
+
+Want a URL instead? Point an HTTPRoute of your own at the `maintenance-manager`
+Service, port 8080, at path `/` (the editor's links are root-relative), and put
+TLS and your own login (OIDC, an IP allowlist) in front of it. Keep that route
+out of every MaintenanceService's selector, or a block phase blocks the editor
+too.
+
+If the editor is ever out of reach, stop a window from the command line:
+
+```sh
+kubectl -n <namespace> patch mmw <window> --type=merge -p '{"spec":{"enabled":false}}'
+```
+
+> **Treat the editor password like a deploy credential.** Whoever holds it can
+> serve any HTML and JavaScript on every gated app's origin. It must be at least
+> 12 characters (shorter, the editor stays off). Login attempts are limited to
+> one per second per client address, so a guessing pod does not lock out your
+> port-forward.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
