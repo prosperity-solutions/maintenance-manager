@@ -24,7 +24,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -46,13 +45,13 @@ var egCharts = map[string]string{
 }
 
 // kindNode is the newest node both EG lines support (1.8: k8s 1.32-1.35,
-// 1.9: 1.33-1.36), pinned by digest (A7).
+// 1.9: 1.33-1.36, https://gateway.envoyproxy.io/news/releases/matrix/),
+// pinned by digest (A7).
 const kindNode = "kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
 
 const (
 	mmNamespace = "maintenance-manager"
 	envoyAddr   = "127.0.0.1:30080" // kind extraPortMappings → Envoy's NodePort (D9)
-	imageTag    = "e2e"
 )
 
 var (
@@ -79,12 +78,26 @@ func run(m *testing.M) int {
 	}
 	cluster = envOr("MM_E2E_CLUSTER", "mm-e2e")
 	keep := os.Getenv("MM_E2E_KEEP") == "1"
+	kubeFile := filepath.Join(os.TempDir(), "mm-e2e-"+cluster+".kubeconfig")
+	defer os.Remove(kubeFile)
+
+	// Compile the tools first, outside the setup deadline: on a cold machine
+	// the first `go tool` build of kind, ko and helm takes a while.
+	t0 := time.Now()
+	for _, name := range []string{"kind", "ko", "helm"} {
+		if err := tool(context.Background(), name, "version"); err != nil {
+			fmt.Fprintf(os.Stderr, "e2e: building %s failed: %v\n", name, err)
+			return 1
+		}
+	}
+	fmt.Printf("e2e: %-28s %s\n", "tools", time.Since(t0).Round(time.Second))
 
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if err := setup(ctx, eg, digest); err != nil {
+	if err := setup(ctx, eg, digest, kubeFile); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e setup failed: %v\n", err)
+		diagnose()
 		if !keep {
 			_ = tool(context.Background(), "kind", "delete", "cluster", "--name", cluster)
 		}
@@ -93,6 +106,9 @@ func run(m *testing.M) int {
 	fmt.Printf("e2e: setup done in %s (EG %s)\n", time.Since(start).Round(time.Second), eg)
 
 	code := m.Run()
+	if code != 0 {
+		diagnose()
+	}
 
 	fmt.Printf("e2e: total %s (EG %s)\n", time.Since(start).Round(time.Second), eg)
 	if !keep {
@@ -101,7 +117,7 @@ func run(m *testing.M) int {
 	return code
 }
 
-func setup(ctx context.Context, eg, digest string) error {
+func setup(ctx context.Context, eg, digest, kubeFile string) error {
 	step := func(name string, f func() error) error {
 		t0 := time.Now()
 		if err := f(); err != nil {
@@ -115,8 +131,15 @@ func setup(ctx context.Context, eg, digest string) error {
 		if strings.Contains("\n"+out+"\n", "\n"+cluster+"\n") {
 			return nil // MM_E2E_KEEP reuse
 		}
-		return tool(ctx, "kind", "create", "cluster", "--name", cluster, "--image", kindNode,
-			"--config", filepath.Join(root, "test/e2e/testdata/kind.yaml"), "--wait", "120s")
+		// Retried: a registry or Docker blip should not turn the leg red.
+		return attempts(ctx, 3, func() error {
+			err := tool(ctx, "kind", "create", "cluster", "--name", cluster, "--image", kindNode,
+				"--config", filepath.Join(root, "test/e2e/testdata/kind.yaml"), "--wait", "120s")
+			if err != nil {
+				_ = tool(ctx, "kind", "delete", "cluster", "--name", cluster)
+			}
+			return err
+		})
 	}); err != nil {
 		return err
 	}
@@ -131,14 +154,15 @@ func setup(ctx context.Context, eg, digest string) error {
 	if kc, err = client.New(cfg, client.Options{Scheme: scheme.Scheme}); err != nil {
 		return err
 	}
-	kubeFile := filepath.Join(os.TempDir(), "mm-e2e-"+cluster+".kubeconfig")
 	if err := os.WriteFile(kubeFile, []byte(kubeconfig), 0o600); err != nil {
 		return err
 	}
 
 	if err := step("envoy gateway "+eg, func() error {
-		if err := tool(ctx, "helm", "upgrade", "--install", "eg", "oci://docker.io/envoyproxy/gateway-helm@"+digest,
-			"--kubeconfig", kubeFile, "-n", "envoy-gateway-system", "--create-namespace", "--wait", "--timeout", "4m"); err != nil {
+		if err := attempts(ctx, 3, func() error {
+			return tool(ctx, "helm", "upgrade", "--install", "eg", "oci://docker.io/envoyproxy/gateway-helm@"+digest,
+				"--kubeconfig", kubeFile, "-n", "envoy-gateway-system", "--create-namespace", "--wait", "--timeout", "4m")
+		}); err != nil {
 			return err
 		}
 		if err := applyFile(ctx, "gateway.yaml", ""); err != nil {
@@ -152,19 +176,65 @@ func setup(ctx context.Context, eg, digest string) error {
 	}
 
 	return step("ko build + chart install", func() error {
+		// The node's architecture, not Go's: an amd64 Go under Rosetta on an
+		// arm64 kind node would otherwise build the wrong image.
+		var nodes corev1.NodeList
+		if err := kc.List(ctx, &nodes); err != nil {
+			return fmt.Errorf("list nodes: %w", err)
+		}
+		if len(nodes.Items) == 0 {
+			return errors.New("the cluster has no nodes")
+		}
+		arch := nodes.Items[0].Status.NodeInfo.Architecture
+		// A tag per run: a reused cluster must run this build, and a
+		// kind-loaded image cannot be pulled by registry digest.
+		tag := fmt.Sprintf("e2e-%d", time.Now().Unix())
 		if err := toolEnv(ctx, []string{"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=" + cluster, "VERSION=0.0.0-e2e"},
-			"ko", "build", "-B", "--tags", imageTag, "--platform", "linux/"+runtime.GOARCH, "./cmd/maintenance-manager"); err != nil {
+			"ko", "build", "-B", "--tags", tag, "--platform", "linux/"+arch, "./cmd/maintenance-manager"); err != nil {
 			return err
 		}
-		// A kind-loaded image cannot be pulled by registry digest: tag, no digest.
 		return tool(ctx, "helm", "upgrade", "--install", "mm", filepath.Join(root, "chart"),
 			"--kubeconfig", kubeFile, "-n", mmNamespace, "--create-namespace",
 			"--set", "editor.password=e2e", "--set", "image.repository=kind.local/maintenance-manager",
-			"--set", "image.tag="+imageTag, "--set", "image.digest=", "--set", "image.pullPolicy=IfNotPresent",
-			// A reused cluster (MM_E2E_KEEP) carries fields earlier tests patched.
+			"--set", "image.tag="+tag, "--set", "image.digest=", "--set", "image.pullPolicy=IfNotPresent",
+			// A reused cluster (MM_E2E_KEEP) may carry fields earlier tests patched.
 			"--force-conflicts",
 			"--wait", "--timeout", "3m")
 	})
+}
+
+// diagnose prints what a red CI leg needs to be debugged from its log alone.
+func diagnose() {
+	if kc == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	fmt.Println("e2e: --- diagnostics ---")
+	var pods corev1.PodList
+	if err := kc.List(ctx, &pods); err == nil {
+		for _, p := range pods.Items {
+			fmt.Printf("pod %s/%s phase=%s deleting=%v\n", p.Namespace, p.Name, p.Status.Phase, p.DeletionTimestamp != nil)
+		}
+	}
+	for _, kind := range []schema.GroupVersionKind{
+		gvk("gateway.envoyproxy.io", "v1alpha1", "SecurityPolicyList"),
+		gvk("gateway.networking.k8s.io", "v1", "HTTPRouteList"),
+	} {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(kind)
+		if err := kc.List(ctx, list); err != nil {
+			continue
+		}
+		for _, o := range list.Items {
+			status, _, _ := unstructured.NestedFieldNoCopy(o.Object, "status")
+			fmt.Printf("%s %s/%s status=%v\n", strings.TrimSuffix(kind.Kind, "List"), o.GetNamespace(), o.GetName(), status)
+		}
+	}
+	var mmPods corev1.PodList
+	if err := kc.List(ctx, &mmPods, client.InNamespace(mmNamespace)); err == nil && len(mmPods.Items) > 0 {
+		fmt.Println("maintenance-manager pods:", len(mmPods.Items))
+	}
 }
 
 // ---- tools ----
@@ -186,8 +256,13 @@ func toolEnv(ctx context.Context, env []string, args ...string) error {
 func toolOutput(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, filepath.Join(root, "scripts/dev/t"), args...)
 	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	return string(out), err
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w\n%s", strings.Join(args, " "), err, tail(stderr.String(), 20))
+	}
+	return string(out), nil
 }
 
 func tail(s string, n int) string {
@@ -205,71 +280,97 @@ func envOr(k, def string) string {
 	return def
 }
 
+// attempts runs f up to n times with a short pause.
+func attempts(ctx context.Context, n int, f func() error) error {
+	var err error
+	for i := 1; i <= n; i++ {
+		if err = f(); err == nil || ctx.Err() != nil {
+			return err
+		}
+		fmt.Printf("e2e: attempt %d/%d failed, retrying: %v\n", i, n, firstLine(err))
+		time.Sleep(time.Duration(i) * 5 * time.Second)
+	}
+	return err
+}
+
+func firstLine(err error) string {
+	s, _, _ := strings.Cut(err.Error(), "\n")
+	return s
+}
+
 // ---- cluster objects ----
 
-// applyFile server-side-applies a testdata manifest, replacing NAMESPACE.
-func applyFile(ctx context.Context, name, namespace string) error {
+// manifests reads a testdata file, replacing NAMESPACE.
+func manifests(name, namespace string) ([]*unstructured.Unstructured, error) {
 	raw, err := os.ReadFile(filepath.Join(root, "test/e2e/testdata", name))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if namespace != "" {
 		raw = bytes.ReplaceAll(raw, []byte("NAMESPACE"), []byte(namespace))
 	}
+	var objs []*unstructured.Unstructured
 	dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
 	for {
 		obj := &unstructured.Unstructured{}
 		if err := dec.Decode(&obj.Object); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return objs, nil
 			}
-			return fmt.Errorf("%s: %w", name, err)
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
-		if len(obj.Object) == 0 {
-			continue
+		if len(obj.Object) > 0 {
+			objs = append(objs, obj)
 		}
+	}
+}
+
+// applyFile server-side-applies a testdata manifest.
+func applyFile(ctx context.Context, name, namespace string) error {
+	objs, err := manifests(name, namespace)
+	if err != nil {
+		return err
+	}
+	for _, obj := range objs {
 		if err := retry(ctx, 90*time.Second, func() error {
 			return kc.Patch(ctx, obj, client.Apply, client.FieldOwner("mm-e2e"), client.ForceOwnership) //nolint:staticcheck // SSA of unstructured
 		}); err != nil {
 			return fmt.Errorf("%s: apply %s %s: %w", name, obj.GetKind(), obj.GetName(), err)
 		}
 	}
+	return nil
 }
 
 // deleteFile deletes what applyFile created.
 func deleteFile(ctx context.Context, name, namespace string) error {
-	raw, err := os.ReadFile(filepath.Join(root, "test/e2e/testdata", name))
+	objs, err := manifests(name, namespace)
 	if err != nil {
 		return err
 	}
-	raw = bytes.ReplaceAll(raw, []byte("NAMESPACE"), []byte(namespace))
-	dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
-	for {
-		obj := &unstructured.Unstructured{}
-		if err := dec.Decode(&obj.Object); err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
-		}
-		if len(obj.Object) == 0 {
-			continue
-		}
+	for _, obj := range objs {
 		if err := client.IgnoreNotFound(kc.Delete(ctx, obj)); err != nil {
-			return err
+			return fmt.Errorf("delete %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 	}
+	return nil
 }
 
-// newApp creates a namespace with the echo app and its HTTPRoute.
+// newApp creates a fresh namespace with the echo app and its HTTPRoute, and
+// deletes the namespace when the test ends.
 func newApp(t *testing.T, ns string) {
 	t.Helper()
 	ctx := t.Context()
 	n := &corev1.Namespace{}
 	n.Name = ns
-	if err := client.IgnoreAlreadyExists(kc.Create(ctx, n)); err != nil {
-		t.Fatal(err)
+	if err := kc.Create(ctx, n); err != nil {
+		t.Fatalf("namespace %s: %v (left over from a kept cluster? delete it or the cluster)", ns, err)
 	}
+	t.Cleanup(func() {
+		// t.Context() is already cancelled when cleanups run.
+		if err := client.IgnoreNotFound(kc.Delete(context.Background(), n)); err != nil {
+			t.Errorf("delete namespace %s: %v", ns, err)
+		}
+	})
 	if err := applyFile(ctx, "app.yaml", ns); err != nil {
 		t.Fatal(err)
 	}
@@ -311,18 +412,17 @@ func waitDeployment(ctx context.Context, ns, name string, timeout time.Duration,
 	})
 }
 
-func retry(ctx context.Context, timeout time.Duration, f func() error) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		err := f()
-		if err == nil {
-			return nil
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return err
-		}
-		time.Sleep(time.Second)
+// mmReplicas is the maintenance-manager Deployment's desired replica count.
+func mmReplicas(t *testing.T) int {
+	t.Helper()
+	var d appsv1.Deployment
+	if err := kc.Get(context.Background(), client.ObjectKey{Namespace: mmNamespace, Name: "maintenance-manager"}, &d); err != nil {
+		t.Fatal(err)
 	}
+	if d.Spec.Replicas == nil {
+		return 1
+	}
+	return int(*d.Spec.Replicas)
 }
 
 // waitPods waits until exactly want maintenance-manager pods exist and none is
@@ -349,6 +449,20 @@ func waitPods(t *testing.T, want int) {
 		}
 		return len(pods.Items) == want && ready == want, fmt.Sprintf("%d pods, %d ready", len(pods.Items), ready)
 	})
+}
+
+func retry(ctx context.Context, timeout time.Duration, f func() error) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := f()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return err
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // waitStable is waitFor that needs n consecutive successes, so one lucky

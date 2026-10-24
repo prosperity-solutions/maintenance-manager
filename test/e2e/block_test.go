@@ -16,22 +16,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// blockRoute points maintenance-manager's hidden --e2e-block-route flag (M2)
-// at ns/web and waits for the rollout.
-func blockRoute(t *testing.T, ns string) {
+// setMMArgs replaces maintenance-manager's container args and waits until only
+// pods with the new args run.
+func setMMArgs(t *testing.T, args []string) {
 	t.Helper()
-	ctx := t.Context()
+	ctx := context.Background()
 	var d appsv1.Deployment
 	if err := kc.Get(ctx, types.NamespacedName{Namespace: mmNamespace, Name: "maintenance-manager"}, &d); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{}
-	for _, a := range d.Spec.Template.Spec.Containers[0].Args {
-		if !strings.HasPrefix(a, "--e2e-block-route=") {
-			args = append(args, a)
-		}
-	}
-	args = append(args, "--e2e-block-route="+ns+"/web")
 	patch, _ := json.Marshal([]map[string]any{{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": args}})
 	if err := kc.Patch(ctx, &d, client.RawPatch(types.JSONPatchType, patch)); err != nil {
 		t.Fatal(err)
@@ -39,18 +32,42 @@ func blockRoute(t *testing.T, ns string) {
 	if err := waitDeployment(ctx, mmNamespace, "maintenance-manager", 3*time.Minute, nil); err != nil {
 		t.Fatal(err)
 	}
-	waitPods(t, 2)
+	waitPods(t, mmReplicas(t))
 }
 
-// attachFixture applies the fixture SecurityPolicy and ReferenceGrant and
-// waits until Envoy Gateway accepts the policy.
+// blockRoute points maintenance-manager's hidden --e2e-block-route flag (M2)
+// at ns/web, and restores the original args when the test ends.
+func blockRoute(t *testing.T, ns string) {
+	t.Helper()
+	var d appsv1.Deployment
+	if err := kc.Get(context.Background(), types.NamespacedName{Namespace: mmNamespace, Name: "maintenance-manager"}, &d); err != nil {
+		t.Fatal(err)
+	}
+	orig := d.Spec.Template.Spec.Containers[0].Args
+	args := []string{}
+	for _, a := range orig {
+		if !strings.HasPrefix(a, "--e2e-block-route=") {
+			args = append(args, a)
+		}
+	}
+	setMMArgs(t, append(args, "--e2e-block-route="+ns+"/web"))
+	t.Cleanup(func() { setMMArgs(t, args) })
+}
+
+// attachFixture applies the fixture SecurityPolicy and ReferenceGrant, waits
+// until Envoy Gateway accepts the policy, and removes both when the test ends.
 func attachFixture(t *testing.T, ns string) {
 	t.Helper()
 	ctx := t.Context()
 	if err := applyFile(ctx, "fixture-securitypolicy.yaml", ns); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = deleteFile(t.Context(), "fixture-securitypolicy.yaml", ns) })
+	t.Cleanup(func() {
+		// t.Context() is already cancelled when cleanups run.
+		if err := deleteFile(context.Background(), "fixture-securitypolicy.yaml", ns); err != nil {
+			t.Errorf("remove fixture: %v", err)
+		}
+	})
 	waitFor(t, 2*time.Minute, "fixture SecurityPolicy Accepted", func() (bool, string) {
 		sp := &unstructured.Unstructured{}
 		sp.SetGroupVersionKind(gvk("gateway.envoyproxy.io", "v1alpha1", "SecurityPolicy"))
@@ -86,6 +103,12 @@ func accepted(obj *unstructured.Unstructured) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+// fromEcho reports whether a response came from the echo app for ns, not from
+// some other 200.
+func fromEcho(r response, ns string) bool {
+	return r.status == 200 && strings.Contains(r.body, `"hostname":"`+ns+`.example.test"`)
 }
 
 // E1: block → 503 HTML for a browser, problem+json for an API client,
@@ -150,7 +173,8 @@ func TestE5FailOpen(t *testing.T) {
 		return r.status == 503, r.String()
 	})
 
-	ctx := context.Background() // also used in Cleanup, after t.Context() is cancelled
+	ctx := context.Background()      // also used in Cleanup, after t.Context() is cancelled
+	replicas := int32(mmReplicas(t)) //nolint:gosec // a replica count, far below 2^31
 	scale := func(n int32) {
 		var d appsv1.Deployment
 		if err := kc.Get(ctx, types.NamespacedName{Namespace: mmNamespace, Name: "maintenance-manager"}, &d); err != nil {
@@ -164,16 +188,13 @@ func TestE5FailOpen(t *testing.T) {
 	}
 	scale(0)
 	t.Cleanup(func() {
-		scale(2)
-		waitPods(t, 2)
+		scale(replicas)
+		waitPods(t, int(replicas))
 	})
 	waitPods(t, 0)
 
-	waitStable(t, 2*time.Minute, 5, "the app answers 200 with maintenance-manager down", func() (bool, string) {
+	waitStable(t, 2*time.Minute, 5, "the echo app answers with maintenance-manager down", func() (bool, string) {
 		r := get(ns, "/", "text/html", nil)
-		return r.status == 200, r.String()
+		return fromEcho(r, ns), r.String()
 	})
-	if r := get(ns, "/", "text/html", nil); r.status != 200 {
-		t.Fatalf("fail-open: want 200 from the app, got %s", r)
-	}
 }

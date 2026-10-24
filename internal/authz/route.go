@@ -46,11 +46,27 @@ func ParseRouteKey(s string) (RouteKey, bool) {
 }
 
 // wantsHTML reports whether the request is a browser page load: GET or HEAD
-// with an Accept header that names text/html (§4.5).
+// with an Accept header that names text/html (§4.5). Methods are
+// case-sensitive (RFC 9110); media types are not, so the match ignores case.
+//
+// It reads Envoy's headers map, whose keys arrive lowercased. That holds while
+// the ext_authz filter does not set encode_raw_headers; Envoy Gateway v1.8.3
+// and v1.9.1 never set it. With it, headers would be empty and every browser
+// would get problem+json.
 func wantsHTML(http *authv3.AttributeContext_HttpRequest) bool {
 	m := http.GetMethod()
 	if m != "GET" && m != "HEAD" {
 		return false
 	}
-	return strings.Contains(http.GetHeaders()["accept"], "text/html")
+	return containsFold(http.GetHeaders()["accept"], "text/html")
+}
+
+// containsFold is strings.Contains ignoring ASCII case, without allocating.
+func containsFold(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if strings.EqualFold(s[i:i+len(sub)], sub) {
+			return true
+		}
+	}
+	return false
 }

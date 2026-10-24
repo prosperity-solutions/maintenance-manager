@@ -217,14 +217,20 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Its own cache key (the harness file is in it): e2e builds kind, ko and
+          # helm, which the race-built test cache never holds.
           cache-dependency-path: |
             go.sum
             tools/go.sum
             tools/actionlint/go.sum
+            test/e2e/harness_test.go
+      - name: Build the e2e tools (kind, ko, helm)
+        run: scripts/ci/prefetch.sh sigs.k8s.io/kind github.com/google/ko helm.sh/helm/v4/cmd/helm
       - name: e2e on kind
         env:
           MM_E2E_EG: ${{ matrix.eg }}
-        run: go test -tags e2e -count=1 -v -timeout 14m ./test/e2e/...
+        # Below the job timeout, so a hang ends in Go's goroutine dump, not a killed job.
+        run: go test -tags e2e -count=1 -v -timeout 11m ./test/e2e/...
 
   all-green:
     name: all-green

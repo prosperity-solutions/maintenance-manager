@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"encoding/json"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -74,6 +75,8 @@ func TestWantsHTML(t *testing.T) {
 		{"GET", "application/json", false},
 		{"GET", "", false},
 		{"GET", "*/*", false},
+		{"GET", "TEXT/HTML", true},
+		{"get", "text/html", false}, // methods are case-sensitive
 	}
 	for _, tc := range cases {
 		got := wantsHTML(request(tc.method, tc.accept, nil).GetAttributes().GetRequest().GetHttp())
@@ -119,5 +122,39 @@ func TestCheckAllocsWithRoute(t *testing.T) {
 		if n := testing.AllocsPerRun(1000, func() { _, _ = s.Check(ctx, req) }); n > 2 {
 			t.Fatalf("Check allocates %.0f times per call; the budget is 2", n)
 		}
+	}
+}
+
+func TestStaticBlockResponses(t *testing.T) {
+	cases := []struct {
+		name        string
+		resp        *authv3.CheckResponse
+		contentType string
+	}{
+		{"html", staticBlockHTMLResponse, "text/html; charset=utf-8"},
+		{"problem+json", staticBlockJSONResponse, "application/problem+json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := tc.resp.GetDeniedResponse()
+			if tc.resp.GetStatus().GetCode() == 0 || d.GetStatus().GetCode() != 503 {
+				t.Fatalf("want a denied 503, got grpc %d / http %d", tc.resp.GetStatus().GetCode(), d.GetStatus().GetCode())
+			}
+			h := map[string]string{}
+			for _, o := range d.GetHeaders() {
+				h[o.GetHeader().GetKey()] = o.GetHeader().GetValue()
+			}
+			if h["content-type"] != tc.contentType || h["cache-control"] != "no-store" {
+				t.Fatalf("headers %v", h)
+			}
+		})
+	}
+	var problem map[string]any
+	if err := json.Unmarshal([]byte(staticBlockJSON), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem["status"] != float64(503) || problem["type"] != "https://maintenance-manager.oss.life.li/problems/maintenance" ||
+		problem["until"] != nil || problem["title"] == "" || problem["detail"] == "" {
+		t.Fatalf("problem+json does not match §6: %v", problem)
 	}
 }

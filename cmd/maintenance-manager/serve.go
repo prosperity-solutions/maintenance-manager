@@ -38,8 +38,8 @@ func parseServe(args []string) (serveConfig, error) {
 	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", ":8081", "metrics and health address (/metrics, /healthz, /readyz)")
 	var block string
 	// Test-only (M2): blocks one route with the static page until windows
-	// exist. Not in the usage text; M3 removes it.
-	fs.StringVar(&block, "e2e-block-route", "", "")
+	// exist. M3 removes it.
+	fs.StringVar(&block, "e2e-block-route", "", "test only: block `namespace/name` with the static page (removed in M3)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
