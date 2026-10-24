@@ -10,7 +10,7 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// version is set at build time (-ldflags "-X main.version=vX.Y.Z", see .ko.yaml).
+// version is set at build time (-ldflags "-X main.version=X.Y.Z", see .ko.yaml).
 var version = "dev"
 
 const usage = `usage: maintenance-manager <command>

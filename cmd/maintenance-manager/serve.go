@@ -153,6 +153,9 @@ func (c *cacheWatcher) Start(ctx context.Context) error {
 		}
 	}
 	if !c.cache.WaitForCacheSync(ctx) {
+		if ctx.Err() != nil {
+			return nil // shut down before the caches synced
+		}
 		return errors.New("caches did not sync")
 	}
 	c.ready.ok.Store(true)
