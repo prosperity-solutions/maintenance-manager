@@ -299,3 +299,63 @@ func TestWarnings(t *testing.T) {
 		t.Fatalf("warnings %q", got)
 	}
 }
+
+func TestBuildSharesDecisionsAcrossRoutes(t *testing.T) {
+	// Every route a service selects must share one decision, so authz renders
+	// each page once, not once per route.
+	w := window("db", true, at(22, 30), phase("down", at(20, 0), mmv1.ActionBlock, "shop"))
+	routes := []RouteInfo{shopRoute,
+		{Key: RouteKey{Namespace: "shop", Name: "api"}, Labels: map[string]string{"app": "shop"}},
+		{Key: RouteKey{Namespace: "shop2", Name: "web"}, Labels: map[string]string{"app": "shop"}},
+	}
+	snap := Build(Input{Windows: []mmv1.MaintenanceWindow{w}, Services: services("shop"), Routes: routes, Now: t0})
+	first := snap.Routes[routes[0].Key].Timeline[0]
+	for _, r := range routes[1:] {
+		if snap.Routes[r.Key].Timeline[0] != first {
+			t.Fatalf("route %v has its own decision", r.Key)
+		}
+	}
+}
+
+func TestBuildRetryAfterUnknownBeforePendingPhase(t *testing.T) {
+	// block, then a pending phase: the block ends whenever someone starts the
+	// next phase, so neither .Until nor Retry-After may promise endsAt.
+	w := window("db", true, at(22, 30),
+		phase("down", at(20, 0), mmv1.ActionBlock, "shop"),
+		phase("after", nil, mmv1.ActionBanner, "shop"),
+	)
+	snap := Build(Input{Windows: []mmv1.MaintenanceWindow{w}, Services: services("shop"), Routes: []RouteInfo{shopRoute}, Now: t0})
+	d := snap.Routes[shopRoute.Key].Timeline[0]
+	if !d.Until.IsZero() || !d.RetryAfter.IsZero() {
+		t.Fatalf("until %s retryAfter %s, want both unknown", d.Until, d.RetryAfter)
+	}
+}
+
+func TestBuildFirstRoutingWins(t *testing.T) {
+	// Two services in different routings of one phase select the same route:
+	// the first routing (in order) decides the page (§4.4 rule 9).
+	pg := func(name string) mmv1.MaintenancePage {
+		return mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: mmv1.MaintenancePageSpec{
+			FallbackLocale: "en", Locales: map[string]mmv1.PageText{"en": {Title: name}}}}
+	}
+	svcs := services("shop")
+	svcs = append(svcs, mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Name: "all"},
+		Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "shop"}}}})
+	w := window("w", true, nil, mmv1.Phase{Name: "p", Action: mmv1.ActionBlock, Routings: []mmv1.Routing{
+		{Services: []string{"all"}, Page: "first"},
+		{Services: []string{"shop"}, Page: "second"},
+	}})
+	snap := Build(Input{Windows: []mmv1.MaintenanceWindow{w}, Pages: []mmv1.MaintenancePage{pg("first"), pg("second")}, Services: svcs, Routes: []RouteInfo{shopRoute}, Now: t0})
+	if got := snap.Routes[shopRoute.Key].Timeline[0].Page.Name; got != "first" {
+		t.Fatalf("page %q, want first", got)
+	}
+}
+
+func TestValidatePhaseName(t *testing.T) {
+	for name, ok := range map[string]bool{"warn": true, "down-2": true, "a": true, "Warn": false, "a b": false, "a;action=block": false, "-a": false, strings.Repeat("a", 64): false} {
+		spec := mmv1.MaintenanceWindowSpec{Phases: []mmv1.Phase{phase(name, nil, mmv1.ActionBlock, "x")}}
+		if got := len(ValidateWindow(&spec)) == 0; got != ok {
+			t.Errorf("phase name %q valid = %v, want %v", name, got, ok)
+		}
+	}
+}

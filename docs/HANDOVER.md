@@ -91,6 +91,7 @@ client ─▶ Envoy ─(armed routes only)─ Check(route id via route metadata)
 
 1. **Snapshot builder** (all replicas):
    - Watches our three CRDs and HTTPRoutes. HTTPRoutes go through a cache transform that keeps only name, namespace, labels, generation and parentRefs, and drops `managedFields`, annotations and status.
+   - **As built (M3):** every replica watches HTTPRoutes **metadata-only** (`PartialObjectMetadata`, stripped of managedFields, annotations and owner references): the snapshot needs names and labels only, and a metadata watch carries no spec at all. The M4 controller, which needs `parentRefs` for §5.3, adds its own typed HTTPRoute watch with a transform that keeps only `parentRefs`.
    - Rebuilds with a **100 ms trailing debounce, max 1 s**. Status-only updates don't trigger a rebuild: the predicate is `predicate.Or(GenerationChanged, LabelChanged)`. Labels don't bump `generation`, and a route relabelled into a selector must be picked up.
    - Swaps an immutable snapshot atomically. The hot path reads only the snapshot.
 2. **Controller** (leader-elected via Lease):
@@ -190,6 +191,7 @@ spec:
 9. **Validation:**
    - A service may appear at most once per phase, across all of that phase's routings.
    - A routing whose page is missing uses the default page, and a missing service is skipped. The editor shows both as warnings.
+   - Two *different* services in different routings of one phase may select the same route. Then the first routing in order (and the first service in it) decides that route's page. This is deliberate and tested, not an error.
    - A window that fails validation is **invalid** and is never armed.
 10. **Overlap:** if several active windows cover a route, the most severe action wins (`block > interstitial > banner`). On a tie, the lexicographically smallest window name wins.
 
@@ -318,7 +320,7 @@ Implementation notes:
   - block HTML and block problem+json per (page, locale, window, phase)
 
   `Check()` returns a shared pointer, so serving a decision allocates nothing. (gRPC only reads the message, so sharing is safe.) Bodies are Go `string`s (the proto field type). `.Until` varies per window and phase, which is why the variants are keyed that way. `banner` has no body.
-- **`Retry-After`** is precomputed as an HTTP-date: the end of the *contiguous* run of block phases, omitted if unknown. Nothing is computed per request except the interstitial cookie comparison.
+- **`Retry-After`** is precomputed as an HTTP-date: the end of the *contiguous* run of block phases, omitted if unknown. That includes a run whose last phase is followed by a pending phase: it ends whenever someone presses "Start next phase now", so neither `Retry-After` nor `.Until`/`until` promise `endsAt`. Nothing is computed per request except the interstitial cookie comparison.
 - **Expected allocations:** decoding the request (unavoidable, outside the budget) plus ≤ 2 in our code. If the benchmark shows more, fix the code, not the gate.
 - **Interstitial cookie:** `mm_seen_<hash8(window.UID)>=<phaseKey>; Path=/; HttpOnly; SameSite=Lax`.
   - It is a **session cookie**: no `Max-Age`, no `Secure`. Behind a TLS-terminating load balancer Envoy often sees `http`, and a `Secure` cookie would then make the interstitial loop forever.
@@ -1136,7 +1138,7 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 | D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README |
 | D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does |
 | D7 | `Check()` allocation count achievable with go-control-plane protos | Benchmark; if > 2 is unavoidable in proto handling, set the gate to the measured floor and explain why. **Measured (M3):** 0 allocs/op and about 135 ns/op (block HTML with Accept-Language negotiation, laptop). Route metadata lookups, header lookups, cookie scanning, locale matching and the query split all work on the decoded request's strings without copying, and every response is a shared precomputed value. The gate stays at ≤ 2 allocs/op and < 50 µs/op (`TestCheckBudget`, run by `test` with `MM_BENCH_GATE=1`); `TestCheckAllocs` holds every hot path at ≤ 2 in plain `go test` |
-| D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers |
+| D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers. **M3 (laptop, E1–E5 + E8, EG v1.9.1):** tools 54 s (cold build, outside the setup clock), setup 1m17s, tests about 115 s, total 3m12s; E8 alone waits about 75 s for its dated phase. **CI (M2):** about 7.3 min per leg on ubuntu-24.04 |
 | D9 | The node port and kind port mapping values | Pick fixed values in `test/e2e`, document them. **Settled (M2):** Envoy NodePort 30080 ↔ `127.0.0.1:30080` (`test/e2e/testdata/kind.yaml`, `gateway.yaml`); kind node `kindest/node:v1.35.8` by digest, the newest Kubernetes both EG 1.8 (1.32–1.35) and 1.9 (1.33–1.36) support |
 | D10 | Default page look (built-in template) | Your call: plain, accessible, inline CSS, dark-mode aware, < 8 KB |
 | D11 | README wording, pitch and examples | Your call, following the voice rules in §20.2 |

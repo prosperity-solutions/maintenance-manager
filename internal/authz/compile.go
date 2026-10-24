@@ -25,6 +25,9 @@ const (
 // interstitialRefresh is hardcoded on purpose (§11).
 const interstitialRefresh = "8"
 
+// lastResortPage is served when even the built-in page cannot render.
+const lastResortPage = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Maintenance</title><h1>Maintenance</h1><p>This service is temporarily unavailable.</p></html>`
+
 // table is a compiled snapshot: every response Check() can give, built once.
 type table struct {
 	routes map[snapshot.RouteKey][]*decision
@@ -152,7 +155,8 @@ func renderPage(d *snapshot.Decision, loc string, text mmv1.PageText, interstiti
 	}
 	body, err = render.Default.Render(in)
 	if err != nil {
-		return text.Title // the built-in page cannot fail on valid input; never return nothing
+		// Only oversized texts get here; never serve them raw.
+		return lastResortPage
 	}
 	return body
 }

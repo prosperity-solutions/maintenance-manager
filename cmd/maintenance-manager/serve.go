@@ -42,6 +42,9 @@ func parseServe(args []string) (serveConfig, error) {
 	if cfg.Namespace == "" {
 		return cfg, errors.New("POD_NAMESPACE is not set; the chart sets it from the downward API")
 	}
+	if cfg.Bypass != "" && len(cfg.Bypass) < 16 {
+		return cfg, errors.New("MM_BYPASS_TOKEN must be empty (bypass off) or at least 16 characters: the status endpoint would make a short token guessable")
+	}
 	if cfg.ArmingLeadTime < 0 {
 		return cfg, fmt.Errorf("--arming-lead-time must not be negative, got %s", cfg.ArmingLeadTime)
 	}
@@ -110,7 +113,7 @@ func serve(args []string, log *slog.Logger) int {
 		return 1
 	}
 
-	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.ok.Store(false) }}
+	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.shutting.Store(true) }}
 	if err := mgr.Add(srv); err != nil {
 		log.Error("serve: add authz", "err", err)
 		return 1
@@ -119,7 +122,7 @@ func serve(args []string, log *slog.Logger) int {
 		Cache: mgr.GetCache(), Namespace: cfg.Namespace, Bypass: cfg.Bypass, Log: log,
 		OnSnapshot: func(snap *snapshot.Snapshot) {
 			srv.Update(snap)
-			ready.ok.Store(true) // caches synced and the first snapshot exists (§3)
+			ready.loaded.Store(true) // caches synced and the first snapshot exists (§3)
 		},
 	}
 	if err := mgr.Add(builder); err != nil {
@@ -137,10 +140,12 @@ func serve(args []string, log *slog.Logger) int {
 
 // readiness answers /readyz: 200 once the caches have synced and the first
 // snapshot is loaded; 503 again when shutdown starts.
-type readiness struct{ ok atomic.Bool }
+// Two flags, each written by one side, so a rebuild that lands during the
+// shutdown drain cannot report ready again.
+type readiness struct{ loaded, shutting atomic.Bool }
 
 func (r *readiness) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	if !r.ok.Load() {
+	if !r.loaded.Load() || r.shutting.Load() {
 		http.Error(w, "not ready: no snapshot yet, or shutting down", http.StatusServiceUnavailable)
 		return
 	}

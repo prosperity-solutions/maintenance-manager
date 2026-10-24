@@ -126,11 +126,7 @@ func (b *Builder) Start(ctx context.Context) error {
 			if first.IsZero() {
 				first = now
 			}
-			wait := debounceQuiet
-			if left := debounceMax - now.Sub(first); left < wait {
-				wait = max(left, 0)
-			}
-			resetTimer(timer, wait)
+			resetTimer(timer, debounceWait(first, now))
 		case <-timer.C:
 			first = time.Time{}
 			next, err := b.rebuild(ctx)
@@ -145,6 +141,16 @@ func (b *Builder) Start(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// debounceWait is how long to wait before rebuilding, given the first change
+// since the last build: debounceQuiet after the latest change, but never past
+// first+debounceMax (§3).
+func debounceWait(first, now time.Time) time.Duration {
+	if left := debounceMax - now.Sub(first); left < debounceQuiet {
+		return max(left, 0)
+	}
+	return debounceQuiet
 }
 
 func resetTimer(t *time.Timer, d time.Duration) {

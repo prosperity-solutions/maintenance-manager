@@ -78,12 +78,15 @@ func (s *Server) Ready() bool { return s.tbl.Load() != nil }
 // Check answers whether a request may pass (§6). No I/O, no locks, no
 // logging: every answer is a precomputed response from the current table.
 func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.CheckResponse, error) {
-	tbl := s.tbl.Load()
-	if tbl == nil {
-		return okResponse, nil // not ready: fail open
-	}
 	http := req.GetAttributes().GetRequest().GetHttp()
 	headers := http.GetHeaders()
+	tbl := s.tbl.Load()
+	if tbl == nil { // not ready: fail open, but never forward a bypass token
+		if _, ok := headers[bypassHeader]; ok {
+			return okStripResponse, nil
+		}
+		return okResponse, nil
+	}
 	path, query, _ := strings.Cut(http.GetPath(), "?")
 
 	token, hasBypassHdr := headers[bypassHeader]

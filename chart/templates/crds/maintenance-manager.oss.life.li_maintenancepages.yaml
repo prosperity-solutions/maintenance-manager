@@ -64,8 +64,10 @@ spec:
                   description: PageText is the localized text of a page.
                   properties:
                     message:
+                      maxLength: 4096
                       type: string
                     title:
+                      maxLength: 256
                       type: string
                   type: object
                 description: Locales maps a BCP 47 tag (e.g. "de-CH") to its texts.

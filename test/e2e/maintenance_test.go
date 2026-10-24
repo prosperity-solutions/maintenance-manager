@@ -236,9 +236,14 @@ func TestE4Bypass(t *testing.T) {
 		r := get(ns, "/", browser, nil)
 		return r.status == 503, r.String()
 	})
-	r := get(ns, "/", browser, map[string]string{"X-Maintenance-Manager-Bypass": bypassToken})
+	// The canary proves the echo app reflects request headers, so the
+	// absence of the bypass header below means something.
+	r := get(ns, "/", browser, map[string]string{"X-Maintenance-Manager-Bypass": bypassToken, "X-E2e-Canary": "tweet"})
 	if !fromEcho(r, ns) {
 		t.Fatalf("bypass: want the app, got %s", r)
+	}
+	if !strings.Contains(strings.ToLower(r.body), "x-e2e-canary") {
+		t.Fatalf("the echo app did not reflect the canary header, so the next check proves nothing: %s", r.body)
 	}
 	if strings.Contains(strings.ToLower(r.body), "x-maintenance-manager-bypass") || strings.Contains(r.body, bypassToken) {
 		t.Fatalf("the app saw the bypass header: %s", r.body)

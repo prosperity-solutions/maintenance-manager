@@ -69,8 +69,10 @@ type MaintenancePageSpec struct {
 // PageText is the localized text of a page.
 type PageText struct {
 	// +optional
+	// +kubebuilder:validation:MaxLength=256
 	Title string `json:"title,omitempty"`
 	// +optional
+	// +kubebuilder:validation:MaxLength=4096
 	Message string `json:"message,omitempty"`
 }
 
@@ -118,6 +120,9 @@ type MaintenanceWindowSpec struct {
 
 // Phase is one step of a window.
 type Phase struct {
+	// Name is a DNS label (lowercase letters, digits, dashes); it appears in
+	// the X-Maintenance-Manager header.
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
 	// StartsAt is when the phase begins. Empty on phase 0 means "when the

@@ -331,3 +331,69 @@ func TestCheckBudget(t *testing.T) {
 		t.Errorf("%d ns/op; the CI budget is 50 µs", ns)
 	}
 }
+
+func TestCheckMorePaths(t *testing.T) {
+	noRoute := func(headers map[string]string) *authv3.CheckRequest {
+		r := request("GET", headers["accept"], nil)
+		for k, v := range headers {
+			r.Attributes.Request.Http.Headers[k] = v
+		}
+		return r
+	}
+	s := testServer(t, tDown)
+	if resp, _ := s.Check(t.Context(), noRoute(map[string]string{"accept": browser})); statusOf(resp) != 0 || stripsBypass(resp) {
+		t.Fatal("no route metadata: plain pass")
+	}
+	if resp, _ := s.Check(t.Context(), noRoute(map[string]string{bypassHeader: "x"})); statusOf(resp) != 0 || !stripsBypass(resp) {
+		t.Fatal("no route metadata with a bypass header: pass, header stripped")
+	}
+	if resp, _ := s.Check(t.Context(), req{path: "/x?y=1", headers: map[string]string{"accept": browser}}.build()); statusOf(resp) != 503 {
+		t.Fatal("a query string must not hide the block")
+	}
+	if resp, _ := s.Check(t.Context(), req{method: "HEAD", path: statusPath, headers: map[string]string{bypassHeader: testToken}}.build()); resp != statusNoneHead {
+		t.Fatal("HEAD status with a valid bypass: none, no body")
+	}
+	resp, _ := s.Check(t.Context(), req{path: statusPath, headers: map[string]string{bypassHeader: "wrong"}}.build())
+	if !strings.Contains(resp.GetDeniedResponse().GetBody(), `"action":"block"`) {
+		t.Fatal("status with a wrong token still reports the block")
+	}
+	s = testServer(t, tInt)
+	resp, _ = s.Check(t.Context(), req{path: statusPath}.build())
+	if !strings.Contains(resp.GetDeniedResponse().GetBody(), `"action":"interstitial"`) {
+		t.Fatalf("status during the interstitial: %s", resp.GetDeniedResponse().GetBody())
+	}
+	// Not ready yet: never forward a bypass token.
+	if resp, _ := (&Server{}).Check(t.Context(), req{headers: map[string]string{bypassHeader: testToken}}.build()); !stripsBypass(resp) {
+		t.Fatal("no snapshot yet: the bypass header must still be stripped")
+	}
+}
+
+func TestRenderFallback(t *testing.T) {
+	// A template that passes the parse-time sample (en) but fails for "de"
+	// falls back to the built-in page for that locale only.
+	page := mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Spec: mmv1.MaintenancePageSpec{
+		FallbackLocale: "en",
+		HTML:           `<p>{{if eq .Locale "de"}}{{index .Title 99999}}{{end}}custom {{.Title}}</p>`,
+		Locales:        map[string]mmv1.PageText{"en": {Title: "Back soon"}, "de": {Title: "Gleich zurück"}},
+	}}
+	svc := mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Name: "shop"},
+		Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "shop"}}}}
+	w := mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Name: "w", UID: "u"}, Spec: mmv1.MaintenanceWindowSpec{Enabled: true,
+		Phases: []mmv1.Phase{{Name: "down", Action: mmv1.ActionBlock, Routings: []mmv1.Routing{{Services: []string{"shop"}, Page: "p"}}}}}}
+	snap := snapshot.Build(snapshot.Input{Windows: []mmv1.MaintenanceWindow{w}, Pages: []mmv1.MaintenancePage{page},
+		Services: []mmv1.MaintenanceService{svc}, Now: tDown,
+		Routes: []snapshot.RouteInfo{{Key: snapshot.RouteKey{Namespace: "shop", Name: "web"}, Labels: map[string]string{"app": "shop"}}}})
+	if snap.Routes[snapshot.RouteKey{Namespace: "shop", Name: "web"}].Timeline[0].Page.Name != "p" {
+		t.Fatal("the template must pass the parse-time sample (en) for this test")
+	}
+	s := &Server{Now: func() time.Time { return tDown }}
+	s.Update(snap)
+	en, _ := s.Check(t.Context(), req{headers: map[string]string{"accept": browser}}.build())
+	de, _ := s.Check(t.Context(), req{headers: map[string]string{"accept": browser, "accept-language": "de"}}.build())
+	if !strings.Contains(en.GetDeniedResponse().GetBody(), "custom Back soon") {
+		t.Fatalf("en: want the custom page, got %q", en.GetDeniedResponse().GetBody())
+	}
+	if body := de.GetDeniedResponse().GetBody(); strings.Contains(body, "custom") || !strings.Contains(body, "Gleich zurück") {
+		t.Fatalf("de: want the built-in page with the German title, got %q", body)
+	}
+}

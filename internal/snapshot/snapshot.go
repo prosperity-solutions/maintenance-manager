@@ -58,6 +58,10 @@ type Decision struct {
 	Until      time.Time // end of the current phase, zero if unknown (.Until)
 	RetryAfter time.Time // end of the contiguous block run, zero if unknown
 	Page       *Page
+
+	// untilCut: this decision ends where its phase ends, and the next phase
+	// is pending, so the real end is unknown.
+	untilCut bool
 }
 
 // Contains reports whether t falls in [From, To).
@@ -159,6 +163,10 @@ func Build(in Input) *Snapshot {
 		}
 	}
 
+	// Identical decisions are interned, so routes of the same window, phase
+	// and page share one *Decision and authz renders it once, however many
+	// routes a service selects.
+	interned := map[decisionKey]*Decision{}
 	for key, cs := range cands {
 		route := &Route{Key: key}
 		for _, iv := range merge(cs) {
@@ -168,18 +176,36 @@ func Build(in Input) *Snapshot {
 			if page == nil {
 				page = DefaultPage
 			}
+			u := until(c.spec, c.seg)
 			d := &Decision{
 				From: iv.from, To: iv.to,
-				Action: ph.Action, Window: c.window, Phase: ph.Name,
+				untilCut: u.IsZero() && iv.to.Equal(c.seg.To),
+				Action:   ph.Action, Window: c.window, Phase: ph.Name,
 				PhaseKey: PhaseKey(ph), Cookie: CookieName(c.uid),
-				Until: until(c.spec, c.seg), Page: page,
+				Until: u, Page: page,
 			}
 			route.Timeline = append(route.Timeline, d)
 		}
 		fillRetryAfter(route.Timeline)
+		for i, d := range route.Timeline {
+			k := decisionKey{d.Window, d.Phase, d.Page, d.From, d.To, d.Until, d.RetryAfter}
+			if shared, ok := interned[k]; ok {
+				route.Timeline[i] = shared
+			} else {
+				interned[k] = d
+			}
+		}
 		snap.Routes[key] = route
 	}
 	return snap
+}
+
+// decisionKey identifies a decision's content; equal keys mean equal
+// responses. Times are compared as instants (all are UTC).
+type decisionKey struct {
+	window, phase               string
+	page                        *Page
+	from, to, until, retryAfter time.Time
 }
 
 // until is the end of the window's current phase: the next phase's start or
@@ -198,11 +224,18 @@ func fillRetryAfter(tl []*Decision) {
 		if d.Action != mmv1.ActionBlock {
 			continue
 		}
-		end := d.To
-		for j := i + 1; j < len(tl) && !end.IsZero() && tl[j].Action == mmv1.ActionBlock && tl[j].From.Equal(end); j++ {
-			end = tl[j].To
+		last := d
+		for j := i + 1; j < len(tl) && !last.To.IsZero() && tl[j].Action == mmv1.ActionBlock && tl[j].From.Equal(last.To); j++ {
+			last = tl[j]
 		}
-		d.RetryAfter = end
+		// A run that ends where its phase ends but whose next phase is
+		// pending ends whenever someone starts that phase: unknown, like
+		// .Until (§6). A run cut short by another window ends at To.
+		if last.Until.IsZero() && (last.To.IsZero() || last.untilCut) {
+			d.RetryAfter = time.Time{}
+			continue
+		}
+		d.RetryAfter = last.To
 	}
 }
 

@@ -48,7 +48,7 @@ func TestReadiness(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("before sync: %d, want 503", rec.Code)
 	}
-	r.ok.Store(true)
+	r.loaded.Store(true)
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
@@ -71,5 +71,18 @@ func TestScheme(t *testing.T) {
 		if !found {
 			t.Fatalf("%s not registered", kind)
 		}
+	}
+}
+
+func TestReadinessStaysDownAfterShutdown(t *testing.T) {
+	// A rebuild that lands during the drain must not report ready again.
+	r := &readiness{}
+	r.loaded.Store(true)
+	r.shutting.Store(true)
+	r.loaded.Store(true) // the late snapshot
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("during shutdown: %d, want 503", rec.Code)
 	}
 }

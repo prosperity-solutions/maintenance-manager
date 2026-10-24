@@ -2,12 +2,16 @@ package snapshot
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 )
+
+// phaseName is a DNS label: it goes verbatim into a response header.
+var phaseName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // Problem is one validation failure, addressed by the editor's form field
 // names (§10) so the editor can show it inline.
@@ -37,6 +41,8 @@ func ValidateWindow(spec *mmv1.MaintenanceWindowSpec) []Problem {
 		f := fmt.Sprintf("p%d", i)
 		if ph.Name == "" {
 			add(f+".name", "every phase needs a name")
+		} else if !phaseName.MatchString(ph.Name) {
+			add(f+".name", "use lowercase letters, digits and dashes, starting and ending with a letter or digit, at most 63 characters (it goes into the X-Maintenance-Manager header)")
 		} else {
 			if j, dup := names[ph.Name]; dup {
 				add(f+".name", "phase name %q is already used by phase %d", ph.Name, j+1)
