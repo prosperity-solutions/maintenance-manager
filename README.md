@@ -71,7 +71,7 @@ pages:
 |---|---|---|
 | `data-dismiss` | `auto` (after `data-delay` seconds) or `click` | `click` |
 | `data-delay` | seconds | `8` |
-| `data-poll` | seconds | `60` |
+| `data-poll` | seconds, 5–3600; keep it under 900 so a banner shows before a window's 15-minute arming lead time runs out | `60` |
 | `data-locale` | BCP 47 tag | the browser's language |
 
 While the tab is visible, it asks `/__maintenance-manager/status` on your own

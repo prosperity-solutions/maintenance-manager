@@ -1,14 +1,5 @@
-/*! Maintenance Manager for Envoy® client. MIT licence.
- * https://github.com/prosperity-solutions/maintenance-manager
- *
- * <script src="/static/maintenance-manager.js" data-dismiss="click"
- *   data-delay="8" data-poll="60" data-locale="de-CH" defer></script>
- *
- * Polls /__maintenance-manager/status while the tab is visible and shows a
- * banner (banner, interstitial) or a full-screen overlay (block). Styling
- * hooks: --mm-bg, --mm-fg, --mm-accent, --mm-font, --mm-z on the host
- * element #maintenance-manager. No dependencies, no build step.
- */
+/*! Maintenance Manager for Envoy® client, MIT. Usage and styling hooks:
+ * https://github.com/prosperity-solutions/maintenance-manager#telling-users-in-the-app */
 (function () {
   "use strict";
 
@@ -18,8 +9,8 @@
   var ACTIONS = { none: 1, banner: 1, interstitial: 1, block: 1 };
   var script = typeof document !== "undefined" ? document.currentScript : null;
 
-  // num reads seconds within [min, max], or the default. A tiny poll would
-  // flood ext_authz; a huge one overflows setTimeout and fires at once.
+  // num: seconds within [min, max], else the default (a tiny poll floods
+  // ext_authz; a huge one overflows setTimeout).
   function num(v, def, min, max) {
     var n = Number(v);
     return v != null && v !== "" && isFinite(n) && n >= min && n <= max ? n : def;
@@ -48,8 +39,7 @@
     return seconds * (0.8 + 0.4 * r);
   }
 
-  // parseStatus turns a response into a status, or null when it is not ours
-  // (no header: the route is not armed, the app answered).
+  // parseStatus: a status, or null when not ours (the app answered).
   function parseStatus(ours, httpStatus, body) {
     if (!ours || httpStatus !== 200) return null;
     var s;
@@ -71,14 +61,12 @@
     };
   }
 
-  // dismissKey is where a dismissed banner is remembered: per window and
-  // phase, and per end time, so a postponed or extended window shows again.
+  // dismissKey: per window, phase and end, so a postponed window shows again.
   function dismissKey(s) {
     return "mm:" + s.window + ":" + s.phase + (s.until ? ":" + s.until.getTime() : "");
   }
 
-  // reloadDelay: when a block ends, reload after 0–30 s, so not every tab
-  // hits the freshly restarted app at once.
+  // reloadDelay: 0–30 s, so tabs do not all hit the restarted app at once.
   function reloadDelay(r) {
     return Math.floor(r * 30000);
   }
@@ -105,6 +93,8 @@
   var interval = cfg.poll;
   var timer = 0;
   var autoTimer = 0;
+  var reloadTimer = 0;
+  var inert = false;
   var seq = 0;
   var blocked = false;
   var root = null;
@@ -126,11 +116,10 @@
     return e;
   }
 
-  // host creates the shadow root once. Styles go in as a constructed sheet
-  // where supported, which a CSP style-src does not govern; a <style>
-  // element is the fallback.
+  // host: the shadow root. A constructed sheet passes CSP style-src; <style>
+  // is the fallback.
   function host() {
-    if (!root) {
+    if (!root || !root.host.isConnected) { // a framework may replace the document
       var h = el("div");
       h.id = "maintenance-manager";
       root = h.attachShadow({ mode: "open" });
@@ -146,16 +135,23 @@
     return root;
   }
 
-  // clear empties the shadow root (keeping a fallback <style>) without
-  // innerHTML, which a Trusted Types CSP refuses.
+  // clear: no innerHTML (Trusted Types); keeps a fallback <style>.
   function clear() {
     clearTimeout(autoTimer);
     if (root) {
       var keep = root.firstChild && root.firstChild.tagName === "STYLE" ? root.firstChild : null;
       while (root.lastChild && root.lastChild !== keep) root.removeChild(root.lastChild);
     }
-    if (document.body) document.body.inert = false;
+    setInert(false);
     shown = "";
+  }
+
+  // setInert: the page behind a block; only undoes what it did.
+  function setInert(on) {
+    if (document.body && on !== inert) {
+      document.body.inert = on;
+      inert = on;
+    }
   }
 
   function store(key) {
@@ -182,6 +178,7 @@
 
   function render(s) {
     var key = s.action + "|" + dismissKey(s) + "|" + s.title + "|" + s.message;
+    if (s.action === "block") setInert(true); // again: <body> may not have existed last time
     if (key === shown) return;
     clear();
     shown = key;
@@ -189,6 +186,7 @@
     var box = el("div");
     if (s.action === "block") {
       blocked = true;
+      clearTimeout(reloadTimer); // blocked again before the last one's reload
       var o = el("section");
       o.className = "o";
       o.setAttribute("role", "alertdialog");
@@ -198,7 +196,7 @@
       body(s, box, "h1");
       o.appendChild(box);
       r.appendChild(o);
-      if (document.body) document.body.inert = true; // the page behind is out of reach
+      setInert(true);
       o.focus();
       return;
     }
@@ -212,7 +210,8 @@
     b.appendChild(box);
     var close = function () {
       if (shown !== key) return; // something else is showing by now
-      store(k);
+      // Auto: remember it only if the banner was actually on screen.
+      if (cfg.dismiss === "click" || document.visibilityState === "visible") store(k);
       clear();
       shown = key;
     };
@@ -227,12 +226,11 @@
     r.appendChild(b);
   }
 
-  // leaveBlock: a block has ended (into nothing, or into a banner phase), so
-  // the app may be back: reload, spread over 0–30 s.
+  // leaveBlock: a block ended (in nothing or a banner): reload.
   function leaveBlock() {
     if (!blocked) return;
     blocked = false;
-    setTimeout(function () { location.reload(); }, reloadDelay(Math.random()));
+    reloadTimer = setTimeout(function () { location.reload(); }, reloadDelay(Math.random()));
   }
 
   function apply(s) {
@@ -253,9 +251,13 @@
   function poll() {
     if (document.visibilityState !== "visible") return;
     var mine = ++seq;
-    fetch(PATH + "?locale=" + encodeURIComponent(cfg.locale), { redirect: "manual", cache: "no-store", credentials: "same-origin" })
+    var ctl = typeof AbortController === "function" ? new AbortController() : null;
+    var stop = setTimeout(function () { if (ctl) ctl.abort(); }, 20000); // a hung request must not stop polling
+    fetch(PATH + "?locale=" + encodeURIComponent(cfg.locale), { redirect: "manual", cache: "no-store", credentials: "same-origin", signal: ctl && ctl.signal })
       .then(function (res) {
         var ours = res.type !== "opaqueredirect" && res.headers.has(HEADER);
+        // Blocked and a 5xx not from us: the app is not back yet. Keep the overlay.
+        if (blocked && !ours && res.status >= 500) throw new Error("not back yet");
         return (ours ? res.text() : Promise.resolve("")).then(function (t) {
           return { ours: ours, s: parseStatus(ours, res.status, t) };
         });
@@ -265,12 +267,12 @@
         interval = nextInterval(interval, x.ours, cfg.poll);
         apply(x.s);
       }, function () {
-        // No answer at all (offline, a reset): keep what is shown, so a block
-        // does not reload into an error page; ask again less often.
+        // No answer (offline): keep what is shown, ask less often.
         if (mine === seq) interval = nextInterval(interval, false, cfg.poll);
       })
       .catch(function () { /* a rendering error must not stop polling */ })
       .then(function () {
+        clearTimeout(stop);
         if (mine === seq) schedule();
       });
   }

@@ -17,7 +17,8 @@ function node(tag) {
     removeChild(c) { this.children = this.children.filter((x) => x !== c); return c; },
     setAttribute(k, v) { this.attrs[k] = v; },
     addEventListener(t, f) { this.listeners[t] = f; },
-    attachShadow() { this.shadow = node("#shadow"); return this.shadow; },
+    isConnected: true,
+    attachShadow() { this.shadow = node("#shadow"); this.shadow.host = this; return this.shadow; },
     focus() { this.focused = true; },
     set innerHTML(v) { throw new Error("innerHTML is refused (Trusted Types)"); },
   };
@@ -61,7 +62,7 @@ function browser(dataset, responses, store = new Map()) {
     location: { reload: () => { reloads++; } },
     setTimeout: (f, ms) => { timers.set(++id, { f, ms }); return id; },
     clearTimeout: (t) => { timers.delete(t); },
-    Math, JSON, Date, Number, String, Promise, Intl, isFinite, isNaN, encodeURIComponent,
+    Math, JSON, Date, Number, String, Promise, Intl, isFinite, isNaN, encodeURIComponent, AbortController,
     fetch: (url, opts) => {
       requests.push({ url, opts });
       const r = responses.shift() ?? { ours: false, status: 404 };
@@ -104,7 +105,9 @@ test("a banner shows with the right request, and a click dismisses it", async ()
   const b = browser({ locale: "de-CH" }, [banner, banner]);
   await b.flush();
   assert.equal(b.requests[0].url, "/__maintenance-manager/status?locale=de-CH");
-  assert.deepEqual({ ...b.requests[0].opts }, { redirect: "manual", cache: "no-store", credentials: "same-origin" });
+  const { signal, ...opts } = b.requests[0].opts;
+  assert.deepEqual(opts, { redirect: "manual", cache: "no-store", credentials: "same-origin" });
+  assert.ok(signal, "a hung request is aborted after 20 s");
   assert.match(text(b.shadow()), /Maintenance tonight/);
   assert.ok(find(b.shadow(), (n) => n.attrs.role === "status"));
   find(b.shadow(), (n) => n.tagName === "BUTTON").listeners.click();
@@ -197,4 +200,43 @@ test("becoming visible polls at once; a hidden tab does not poll", async () => {
   await b.flush();
   assert.equal(b.requests.length, before + 1);
   assert.match(text(b.shadow()), /Maintenance tonight/);
+});
+
+test("during a block, a 5xx that is not ours keeps the overlay (the app is not back yet)", async () => {
+  const b = browser({}, [block, { ours: false, status: 503 }, none]);
+  await b.flush();
+  await b.tick();
+  assert.ok(find(b.shadow(), (n) => n.attrs.role === "alertdialog"), "Envoy's no-healthy-upstream must not replace the overlay");
+  assert.equal(b.reloadTimer(), undefined);
+  await b.tick();
+  assert.ok(b.reloadTimer(), "the real end reloads");
+});
+
+test("a block followed by an already dismissed banner still reloads", async () => {
+  const b = browser({}, [block, banner], new Map([[key, "1"]]));
+  await b.flush();
+  await b.tick();
+  assert.ok(b.reloadTimer());
+});
+
+test("constructed stylesheets are used where the browser has them", async () => {
+  const b = browser({}, [banner]);
+  // A second page with CSSStyleSheet available: no <style> element at all.
+  const ctxSheet = class { replaceSync(css) { this.css = css; } };
+  const page = (() => {
+    const html = node("html");
+    const ctx = vm.createContext({
+      document: { currentScript: { dataset: {} }, visibilityState: "visible", documentElement: html, body: node("body"), createElement: node, addEventListener() {} },
+      navigator: { language: "en" }, localStorage: { getItem: () => null, setItem() {} }, location: {},
+      setTimeout: () => 0, clearTimeout() {}, CSSStyleSheet: ctxSheet, AbortController,
+      Math, JSON, Date, Number, String, Promise, Intl, isFinite, isNaN, encodeURIComponent,
+      fetch: () => Promise.resolve({ type: "basic", status: 200, headers: { has: () => true }, text: () => Promise.resolve(JSON.stringify(banner.body)) }),
+    });
+    vm.runInContext(src, ctx);
+    return html;
+  })();
+  await b.flush();
+  const shadow = page.children[0].shadow;
+  assert.equal(shadow.adoptedStyleSheets.length, 1);
+  assert.ok(!find(shadow, (n) => n.tagName === "STYLE"), "no inline <style> for style-src to refuse");
 });
