@@ -604,7 +604,7 @@ AGENTS.md CLAUDE.md README.md SECURITY.md LICENSE NOTICE lefthook.yml .golangci.
 `.gitignore`: `notes/`, `.mm-ship.json`, `dist/`, `cmd/maintenance-manager/kodata/`, `.claude/worktrees/`, `.claude/settings.local.json`.
 
 **Product module (`go.mod`):**
-- Go ≥ 1.26.7, which EG v1.9.1's module requires. A `toolchain` line, and `GOTOOLCHAIN=local` in CI.
+- Go ≥ 1.26.7, which EG v1.9.1's module requires. The **`go` line pins the exact patch** (e.g. `go 1.26.10`) in all three `go.mod` files, and CI sets `GOTOOLCHAIN=local`. Verified at M1: `actions/setup-go` with `go-version-file` installs the `go` line's version and ignores a `toolchain` line (CI ran 1.26.7 while `toolchain go1.26.10` was set), and `go mod tidy` drops a `toolchain` line equal to the `go` line. depage age-checks the `go` line when there is no `toolchain` line.
 - `egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"` pinned to v1.9.1. It drags in EG's whole `go.mod`; accept that. **Use only fields that exist in 1.8.**
 - `gwapiv1` (HTTPRoute) and `gwapiv1b1` (ReferenceGrant) from `sigs.k8s.io/gateway-api`.
 - `sigs.k8s.io/controller-runtime` v0.24.x.
@@ -613,7 +613,7 @@ AGENTS.md CLAUDE.md README.md SECURITY.md LICENSE NOTICE lefthook.yml .golangci.
 
 **Tools module (`tools/go.mod`):** a separate module, so tool dependencies never move the product's `k8s.io/*` versions. Run tools as `go tool -modfile=tools/go.mod <name>`; the Makefile-free shortcut is `scripts/dev/t <name>`, a two-line POSIX sh wrapper.
 - **Contents:** `golangci-lint` (as upstream recommends for `go tool`), `controller-gen`, `setup-envtest`, `ko`, `crane`, `svu/v3`, `govulncheck`, `actionlint`, `kubeconform`, `go-licenses/v2`, `kind`, `helm/v4`, `lefthook/v2`.
-- **Toolchain constraint:** every tool must build with the pinned Go toolchain (`toolchain go1.26.10` at bootstrap, allow-listed in `.github/fresh-deps.txt` for GO-2026-6809). lefthook v2.2+ needs Go 1.27, so pin v2.1.x until the toolchain moves.
+- **Toolchain constraint:** every tool must build with the pinned Go toolchain (`go 1.26.10` since M1, allow-listed in `.github/fresh-deps.txt` for GO-2026-6809). lefthook v2.2+ needs Go 1.27, so pin v2.1.x until the toolchain moves.
 - **Clashing tools get their own module.** actionlint v1.7.12 does not build against `go.yaml.in/yaml/v4` rc.6, which ko and gosec require, so it lives in `tools/actionlint/go.mod`. `scripts/dev/t <name>` uses `tools/<name>/go.mod` when it exists and `tools/go.mod` otherwise; `lint` verifies both modules, Dependabot and depage cover both. Fold it back once actionlint builds against the shared version.
 - **go-licenses** always runs with `GOROOT=$(go env GOROOT)` because of upstream bugs #324/#149. It is unmaintained upstream. If it breaks, switch the *check* to `github.com/uw-labs/lichen` and keep `go-licenses save` for the notices.
 - **Not Go:** `zizmor` runs only in CI via `zizmorcore/zizmor-action` (pinned). Locally it's optional (`brew install zizmor`).

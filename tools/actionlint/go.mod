@@ -1,8 +1,6 @@
 module github.com/prosperity-solutions/maintenance-manager/tools/actionlint
 
-go 1.26.7
-
-toolchain go1.26.10
+go 1.26.10
 
 tool github.com/rhysd/actionlint/cmd/actionlint
 

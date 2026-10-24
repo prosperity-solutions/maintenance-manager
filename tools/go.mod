@@ -1,8 +1,6 @@
 module github.com/prosperity-solutions/maintenance-manager/tools
 
-go 1.26.7
-
-toolchain go1.26.10
+go 1.26.10
 
 tool (
 	github.com/caarlos0/svu/v3
