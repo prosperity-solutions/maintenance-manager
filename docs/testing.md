@@ -14,7 +14,7 @@ all of them on every ready PR and every push to `main`. The full plan is
 | benchmark gate | `MM_BENCH_GATE=1 go test -run '^TestCheckBudget$' ./internal/authz` | `Check()` stays at ≤ 2 allocations per call (0 today, about 140 ns locally) and under 50 µs on CI. |
 | envtest | `KUBEBUILDER_ASSETS="$(scripts/dev/t setup-envtest use 1.36.x -p path)" go test -tags envtest ./internal/controller/...` | The controller against a real API server with our CRDs and Envoy Gateway's: arm and disarm order, drift repair, garbage collection, tenant isolation, namespace selectors, `cleanup`. |
 | JS client | `node --test 'client/*.test.mjs'` | The client's pure functions, its behaviour in a small fake browser, and its size (< 4 KB gzipped). Node 24, no packages. |
-| end-to-end | `go test -tags e2e -timeout 20m ./test/e2e/...` | E1–E11 on a kind cluster with real Envoy Gateway (below). |
+| end-to-end | `go test -tags e2e -timeout 20m ./test/e2e/...` | E1–E12 on a kind cluster with real Envoy Gateway (below). |
 | workflows | `go test ./test/workflows/` | The CI rules of §17.2: pinned actions, permissions, no caches in release jobs, harden-runner egress lists. |
 
 The pre-push hook (`scripts/dev/t lefthook install`) runs the unit suite, vet,
@@ -36,11 +36,12 @@ and runs:
 | E4 | the bypass header, stripped before the app |
 | E5 | fail-open when maintenance-manager is gone |
 | E6 | our policy merges with a Gateway-level one (`Merged=True`) |
-| E7 | a foreign route policy makes the controller step aside |
+| E7 | a foreign route policy moves the route from our SecurityPolicy to our EnvoyExtensionPolicy; it stays blocked |
 | E8 | phase transitions on the clock |
-| E9 | uninstall leaves no SecurityPolicy or ReferenceGrant (runs last) |
+| E9 | uninstall leaves no SecurityPolicy, EnvoyExtensionPolicy or ReferenceGrant (runs last) |
 | E10 | a WebSocket survives the listener drain for 60 s and closes cleanly |
 | E11 | the editor through Envoy: forms create, update and delete; cross-site POSTs refused |
+| E12 | a route a platform policy holds (allow-all IP rules, as Qovery attaches) works through our EnvoyExtensionPolicy: banner, status, interstitial cookie, block, bypass |
 | NetworkPolicy | with the chart's NetworkPolicy on (as in every e2e install), a pod in another namespace reaches no port; a proxy-labelled pod in the Envoy namespace reaches authz and the editor, not metrics |
 
 | variable | default | |

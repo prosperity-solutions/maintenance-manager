@@ -17,7 +17,7 @@ const usage = `usage: maintenance-manager <command>
 
 commands:
   serve     run the authz server, the controller and the editor
-  cleanup   remove every SecurityPolicy and ReferenceGrant this install created (the uninstall hook runs it)
+  cleanup   remove every policy and ReferenceGrant this install created (the uninstall hook runs it)
   version   print the version`
 
 func main() {

@@ -7,6 +7,7 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
+	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
@@ -42,11 +43,14 @@ type decision struct {
 	phaseKey     string
 	locales      *locale.Matcher
 
-	pass, passStrip *authv3.CheckResponse            // OK + X-Maintenance-Manager (banner, interstitial pass)
-	page            map[string]*authv3.CheckResponse // per locale: interstitial page or block HTML
-	problem         map[string]*authv3.CheckResponse // per locale: block problem+json
-	status          map[string]*authv3.CheckResponse // per locale: status JSON (GET)
-	statusHead      map[string]*authv3.CheckResponse // per locale: status headers only (HEAD)
+	pass, passStrip *authv3.CheckResponse // OK + X-Maintenance-Manager (banner, interstitial pass)
+	// ext_proc: the request continues, then X-Maintenance-Manager is added to
+	// the app's response.
+	procInfo   *extprocv3.ProcessingResponse
+	page       map[string]answer // per locale: interstitial page or block HTML
+	problem    map[string]answer // per locale: block problem+json
+	status     map[string]answer // per locale: status JSON (GET)
+	statusHead map[string]answer // per locale: status headers only (HEAD)
 }
 
 // Responses that do not depend on a snapshot.
@@ -57,13 +61,17 @@ var (
 			HeadersToRemove: []string{bypassHeader},
 		}},
 	}
+	procPass       = procContinue(false, true)
+	procPassStrip  = procContinue(true, true)
+	procHold       = procContinue(false, false) // the response headers come next
+	procHoldStrip  = procContinue(true, false)
 	statusNone     = statusResponse(render.StatusJSON("none", "", "", "", "", time.Time{}, ""), true)
 	statusNoneHead = statusResponse("", false)
 	statusMethod   = denied(typev3.StatusCode_MethodNotAllowed, "text/plain; charset=utf-8", "405 method not allowed: use GET or HEAD\n",
 		header("allow", "GET, HEAD"), header(infoHeader, "1"))
 )
 
-func statusResponse(body string, withBody bool) *authv3.CheckResponse {
+func statusResponse(body string, withBody bool) answer {
 	if !withBody {
 		body = ""
 	}
@@ -99,10 +107,10 @@ func compileDecision(d *snapshot.Decision, log *slog.Logger) *decision {
 		cookiePrefix: d.Cookie + "=",
 		phaseKey:     d.PhaseKey,
 		locales:      d.Page.Locales,
-		page:         map[string]*authv3.CheckResponse{},
-		problem:      map[string]*authv3.CheckResponse{},
-		status:       map[string]*authv3.CheckResponse{},
-		statusHead:   map[string]*authv3.CheckResponse{},
+		page:         map[string]answer{},
+		problem:      map[string]answer{},
+		status:       map[string]answer{},
+		statusHead:   map[string]answer{},
 	}
 	info := header(infoHeader, fmt.Sprintf("window=%s; phase=%s; action=%s", d.Window, d.Phase, d.Action))
 	cd.pass = &authv3.CheckResponse{
@@ -118,6 +126,7 @@ func compileDecision(d *snapshot.Decision, log *slog.Logger) *decision {
 			HeadersToRemove:      []string{bypassHeader},
 		}},
 	}
+	cd.procInfo = procResponseHeaders(info)
 
 	for _, loc := range d.Page.Locales.Locales() {
 		text := d.Page.Text(loc)

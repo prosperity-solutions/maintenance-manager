@@ -1,5 +1,7 @@
-// Package controller arms and disarms routes: one SecurityPolicy and one
-// ReferenceGrant per app namespace with armed routes (docs/HANDOVER.md §5).
+// Package controller arms and disarms routes: per app namespace with armed
+// routes, one ReferenceGrant and one SecurityPolicy, plus one
+// EnvoyExtensionPolicy for routes whose SecurityPolicy slot another policy
+// holds (docs/HANDOVER.md §5).
 // Desired and Plan are pure; Reconciler applies the plan; Controller runs it
 // on the leader only.
 package controller
@@ -7,6 +9,7 @@ package controller
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
@@ -34,7 +37,8 @@ type TargetSelector struct {
 	NamespaceSelector labels.Selector
 }
 
-// Policy is what the conflict check needs from a SecurityPolicy.
+// Policy is what the conflict check needs from a SecurityPolicy or an
+// EnvoyExtensionPolicy (ExtAuth is false for the latter).
 type Policy struct {
 	Namespace, Name string
 	Ours            bool // carries our owner label value
@@ -57,6 +61,12 @@ type Input struct {
 	Services []mmv1.MaintenanceService
 	Routes   []snapshot.RouteInfo
 	Policies []Policy
+	// Extensions are the EnvoyExtensionPolicies, ours included.
+	Extensions []Policy
+	// ExtArmed holds the routes our EnvoyExtensionPolicies target now: they
+	// stay on it while it is possible, so a route does not flip between the
+	// two policies (each flip drains the listener, §5.4).
+	ExtArmed map[snapshot.RouteKey]bool
 	// ListenerSets maps a ListenerSet to the Gateway it belongs to.
 	ListenerSets map[types.NamespacedName]types.NamespacedName
 	// GatewayLabels and ListenerSetLabels serve targetSelectors on parents.
@@ -64,24 +74,75 @@ type Input struct {
 	ListenerSetLabels map[types.NamespacedName]map[string]string
 	// NamespaceLabels serve namespaces.from: Selector.
 	NamespaceLabels map[string]map[string]string
-	// Blocked holds app namespaces we cannot arm, with the reason (a foreign
-	// SecurityPolicy squatting on our name).
-	Blocked map[string]string
-	Now     time.Time
-	Lead    time.Duration
+	// Blocked and BlockedExt hold app namespaces where a foreign
+	// SecurityPolicy or EnvoyExtensionPolicy squats on our name, with the
+	// reason.
+	Blocked    map[string]string
+	BlockedExt map[string]string
+	Now        time.Time
+	Lead       time.Duration
 }
 
-// Desired is the arm set: per app namespace, the sorted names of its armed,
-// conflict-free routes.
+// Desired is the arm set: per app namespace, the sorted names of the routes
+// to arm through our SecurityPolicy (Routes) and through our
+// EnvoyExtensionPolicy (ExtRoutes).
 type Desired struct {
 	Routes    map[string][]string
+	ExtRoutes map[string][]string
 	Conflicts map[snapshot.RouteKey][]string // why a route is not armed
+	Via       map[snapshot.RouteKey]string   // why a route is armed through the EnvoyExtensionPolicy
 	NextWake  time.Time                      // next arm boundary, zero if none
+}
+
+// Mode is how a route is armed.
+type Mode int
+
+const (
+	ModeNone            Mode = iota // not armed: Conflicts says why
+	ModeSecurityPolicy              // our SecurityPolicy (ext_authz)
+	ModeExtensionPolicy             // our EnvoyExtensionPolicy (ext_proc)
+)
+
+// attach is the ladder of §5.3: our SecurityPolicy when the route's slot is
+// free; else our EnvoyExtensionPolicy when that slot is free; else nothing.
+// A route our EnvoyExtensionPolicy already targets stays on it while it can.
+// It returns the mode and, for ModeNone, the reasons, or for
+// ModeExtensionPolicy, why.
+func attach(r snapshot.RouteInfo, in Input) (Mode, []string, string) {
+	var sp []string
+	if why, blocked := in.Blocked[r.Key.Namespace]; blocked {
+		sp = []string{why}
+	} else {
+		sp = conflicts(r, in)
+	}
+	var ext []string
+	if why, blocked := in.BlockedExt[r.Key.Namespace]; blocked {
+		ext = []string{why}
+	} else {
+		ext = extConflicts(r, in)
+	}
+	switch {
+	case len(ext) == 0 && in.ExtArmed[r.Key]:
+		why := "kept on maintenance-manager's EnvoyExtensionPolicy while the window stays armed"
+		if len(sp) > 0 {
+			why = sp[0]
+		}
+		return ModeExtensionPolicy, nil, extVia(why)
+	case len(sp) == 0:
+		return ModeSecurityPolicy, nil, ""
+	case len(ext) == 0:
+		return ModeExtensionPolicy, nil, extVia(strings.Join(sp, "; "))
+	}
+	return ModeNone, append(sp, ext...), ""
+}
+
+func extVia(why string) string {
+	return "armed through an EnvoyExtensionPolicy (" + why + "); the platform's authentication on this route answers first"
 }
 
 // ComputeDesired applies §4.4 rule 7 (armed windows) and §5.3 (conflicts).
 func ComputeDesired(in Input) Desired {
-	d := Desired{Routes: map[string][]string{}, Conflicts: map[snapshot.RouteKey][]string{}}
+	d := Desired{Routes: map[string][]string{}, ExtRoutes: map[string][]string{}, Conflicts: map[snapshot.RouteKey][]string{}, Via: map[snapshot.RouteKey]string{}}
 	selectors := snapshot.Selectors(in.Services)
 	armed := map[snapshot.RouteKey]snapshot.RouteInfo{}
 	for i := range in.Windows {
@@ -100,20 +161,56 @@ func ComputeDesired(in Input) Desired {
 		}
 	}
 	for key, r := range armed {
-		if why, blocked := in.Blocked[key.Namespace]; blocked {
-			d.Conflicts[key] = []string{why}
-			continue
-		}
-		if reasons := conflicts(r, in); len(reasons) > 0 {
+		switch mode, reasons, via := attach(r, in); mode {
+		case ModeSecurityPolicy:
+			d.Routes[key.Namespace] = append(d.Routes[key.Namespace], key.Name)
+		case ModeExtensionPolicy:
+			d.ExtRoutes[key.Namespace] = append(d.ExtRoutes[key.Namespace], key.Name)
+			d.Via[key] = via
+		default:
 			d.Conflicts[key] = reasons
-			continue
 		}
-		d.Routes[key.Namespace] = append(d.Routes[key.Namespace], key.Name)
 	}
-	for ns := range d.Routes {
-		slices.Sort(d.Routes[ns])
+	for _, m := range []map[string][]string{d.Routes, d.ExtRoutes} {
+		for ns := range m {
+			slices.Sort(m[ns])
+		}
 	}
 	return d
+}
+
+// extConflicts lists the foreign EnvoyExtensionPolicies that make the
+// EnvoyExtensionPolicy rung unsafe (§5.3): one that targets the route (the
+// oldest wins), or one that targets its parent Gateway, listener or
+// ListenerSet (ours on the route would replace it: Envoy Gateway 1.8 has no
+// mergeType for EnvoyExtensionPolicies).
+func extConflicts(r snapshot.RouteInfo, in Input) []string {
+	var out []string
+	parents := parentsOf(r, in.ListenerSets)
+	for _, p := range in.Extensions {
+		if p.Ours {
+			continue
+		}
+		name := p.Namespace + "/" + p.Name
+		if p.targets(r.Key.Namespace, "HTTPRoute", r.Key.Name, r.Labels, in.NamespaceLabels) {
+			out = append(out, fmt.Sprintf("EnvoyExtensionPolicy %s targets this route", name))
+			continue
+		}
+		for _, pa := range parents {
+			if p.targets(pa.Namespace, pa.Kind, pa.Name, parentLabels(pa, in), in.NamespaceLabels) {
+				out = append(out, fmt.Sprintf("EnvoyExtensionPolicy %s targets the parent %s %s/%s", name, pa.Kind, pa.Namespace, pa.Name))
+				break
+			}
+		}
+	}
+	return out
+}
+
+func parentLabels(pa Parent, in Input) map[string]string {
+	if pa.Kind == "ListenerSet" {
+		return in.ListenerSetLabels[types.NamespacedName{Namespace: pa.Namespace, Name: pa.Name}]
+	}
+	return in.GatewayLabels[types.NamespacedName{Namespace: pa.Namespace, Name: pa.Name}]
 }
 
 // conflicts lists the foreign SecurityPolicies that make a route unsafe to
@@ -135,11 +232,7 @@ func conflicts(r snapshot.RouteInfo, in Input) []string {
 			continue // a parent policy without extAuth merges (mergeType)
 		}
 		for _, pa := range parents {
-			lbls := in.GatewayLabels[types.NamespacedName{Namespace: pa.Namespace, Name: pa.Name}]
-			if pa.Kind == "ListenerSet" {
-				lbls = in.ListenerSetLabels[types.NamespacedName{Namespace: pa.Namespace, Name: pa.Name}]
-			}
-			if p.targets(pa.Namespace, pa.Kind, pa.Name, lbls, in.NamespaceLabels) {
+			if p.targets(pa.Namespace, pa.Kind, pa.Name, parentLabels(pa, in), in.NamespaceLabels) {
 				out = append(out, fmt.Sprintf("SecurityPolicy %s has extAuth on the parent %s %s/%s", name, pa.Kind, pa.Namespace, pa.Name))
 				break
 			}

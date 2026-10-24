@@ -356,7 +356,7 @@ func TestCheckMorePaths(t *testing.T) {
 	if resp, _ := s.Check(t.Context(), req{path: "/x?y=1", headers: map[string]string{"accept": browser}}.build()); statusOf(resp) != 503 {
 		t.Fatal("a query string must not hide the block")
 	}
-	if resp, _ := s.Check(t.Context(), req{method: "HEAD", path: statusPath, headers: map[string]string{bypassHeader: testToken}}.build()); resp != statusNoneHead {
+	if resp, _ := s.Check(t.Context(), req{method: "HEAD", path: statusPath, headers: map[string]string{bypassHeader: testToken}}.build()); resp != statusNoneHead.authz {
 		t.Fatal("HEAD status with a valid bypass: none, no body")
 	}
 	resp, _ := s.Check(t.Context(), req{path: statusPath, headers: map[string]string{bypassHeader: "wrong"}}.build())

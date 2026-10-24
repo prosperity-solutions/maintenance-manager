@@ -16,15 +16,25 @@ import (
 type View struct {
 	Desired Desired
 	// Conflicts holds the §5.3 reasons for every route a service selects,
-	// armed or not, so the editor can show red before a window arms.
+	// armed or not, that neither of our policies can arm, so the editor can
+	// show red before a window arms.
 	Conflicts map[snapshot.RouteKey][]string
-	// Accepted is, per app namespace that has our SecurityPolicy, whether
-	// Envoy Gateway accepted it (§10 "Envoy Accepted"), and why not.
-	Accepted map[string]Acceptance
-	// Targets is, per app namespace, the HTTPRoutes our SecurityPolicy
-	// targets right now: what is armed, as opposed to what Desired says
-	// the leader will arm.
-	Targets map[string]map[string]bool
+	// Via says, for every selected route that would be armed through our
+	// EnvoyExtensionPolicy, why.
+	Via map[snapshot.RouteKey]string
+	// Accepted is, per app namespace and policy kind (SecurityPolicy,
+	// EnvoyExtensionPolicy) we have there, whether Envoy Gateway accepted it
+	// (§10 "Envoy Accepted"), and why not.
+	Accepted map[PolicyRef]Acceptance
+	// Targets is, per app namespace, the HTTPRoutes our policies target
+	// right now, with the kind of the policy: what is armed, as opposed to
+	// what Desired says the leader will arm.
+	Targets map[string]map[string]string
+}
+
+// PolicyRef names one of our policies: its app namespace and kind.
+type PolicyRef struct {
+	Namespace, Kind string
 }
 
 // Acceptance is Envoy Gateway's verdict on one of our SecurityPolicies.
@@ -40,7 +50,8 @@ func (r *Reconciler) View(ctx context.Context) (View, error) {
 	if err != nil {
 		return View{}, fmt.Errorf("read: %w", err)
 	}
-	v := View{Desired: ComputeDesired(in), Conflicts: map[snapshot.RouteKey][]string{}, Accepted: map[string]Acceptance{}, Targets: map[string]map[string]bool{}}
+	v := View{Desired: ComputeDesired(in), Conflicts: map[snapshot.RouteKey][]string{}, Via: map[snapshot.RouteKey]string{},
+		Accepted: map[PolicyRef]Acceptance{}, Targets: map[string]map[string]string{}}
 	selectors := snapshot.Selectors(in.Services)
 	for _, rt := range in.Routes {
 		matched := false
@@ -53,21 +64,26 @@ func (r *Reconciler) View(ctx context.Context) (View, error) {
 		if !matched {
 			continue
 		}
-		if why, blocked := in.Blocked[rt.Key.Namespace]; blocked {
-			v.Conflicts[rt.Key] = []string{why}
-		} else if reasons := conflicts(rt, in); len(reasons) > 0 {
+		switch mode, reasons, via := attach(rt, in); mode {
+		case ModeNone:
 			v.Conflicts[rt.Key] = reasons
+		case ModeExtensionPolicy:
+			v.Via[rt.Key] = via
 		}
 	}
-	for ns, sp := range ex.policies {
-		ok, why := EnvoyAccepted(sp)
-		v.Accepted[ns] = Acceptance{OK: ok, Reason: why}
-		refs, _, _ := unstructured.NestedSlice(sp.Object, "spec", "targetRefs")
-		v.Targets[ns] = map[string]bool{}
-		for _, ref := range refs {
-			if m, ok := ref.(map[string]any); ok && m["kind"] == "HTTPRoute" {
-				if name, ok := m["name"].(string); ok {
-					v.Targets[ns][name] = true
+	for _, objs := range []map[string]*unstructured.Unstructured{ex.policies, ex.extensions} {
+		for ns, obj := range objs {
+			ok, why := EnvoyAccepted(obj)
+			v.Accepted[PolicyRef{Namespace: ns, Kind: obj.GetKind()}] = Acceptance{OK: ok, Reason: why}
+			refs, _, _ := unstructured.NestedSlice(obj.Object, "spec", "targetRefs")
+			if v.Targets[ns] == nil {
+				v.Targets[ns] = map[string]string{}
+			}
+			for _, ref := range refs {
+				if m, ok := ref.(map[string]any); ok && m["kind"] == "HTTPRoute" {
+					if name, ok := m["name"].(string); ok {
+						v.Targets[ns][name] = obj.GetKind()
+					}
 				}
 			}
 		}

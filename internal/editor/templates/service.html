@@ -17,7 +17,7 @@
 <h2>Matched routes</h2>
 {{if .RoutesErr}}<p class="warn">{{.RoutesErr}}</p>{{end}}
 <table><tr><th>Route</th><th>Hostnames</th><th>Conflicts</th></tr>
-{{range .Routes}}<tr><td>{{.Namespace}}/{{.Name}}</td><td>{{range .Hostnames}}{{.}} {{end}}</td><td>{{range .Conflicts}}<div class="err">{{.}}</div>{{end}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No HTTPRoute matches.</td></tr>{{end}}
+{{range .Routes}}<tr><td>{{.Namespace}}/{{.Name}}</td><td>{{range .Hostnames}}{{.}} {{end}}</td><td>{{range .Conflicts}}<div class="err">{{.}}</div>{{end}}{{if .Via}}<div class="muted">{{.Via}}</div>{{end}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No HTTPRoute matches.</td></tr>{{end}}
 </table>
 <form method="post" action="/services/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete service</button></p></form>
 {{end}}

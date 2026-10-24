@@ -18,7 +18,8 @@ import (
 // Cleanup is `maintenance-manager cleanup`, run by the chart's pre-delete
 // hook (§5.1): scale our Deployment to 0 and wait until its pods are gone
 // and the Lease is free, so no leader can write again; then delete our
-// SecurityPolicies (cluster-wide, by owner label and name), then our ReferenceGrants.
+// SecurityPolicies and EnvoyExtensionPolicies (cluster-wide, by owner label
+// and name), then our ReferenceGrants.
 // It is idempotent: re-running after a partial failure finishes the job.
 func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.Logger) error {
 	var d appsv1.Deployment
@@ -68,17 +69,19 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 		return err
 	}
 
-	// The same ownership rules as the controller: our SecurityPolicy name with
-	// our owner label, and every mm-from-<ns> grant in the release namespace.
+	// The same ownership rules as the controller: our policy name with our
+	// owner label, and every mm-from-<ns> grant in the release namespace.
+	// Policies first: a grant goes only once nothing can need it.
 	for _, step := range []struct {
 		gvkList string
 		opts    []client.ListOption
 	}{
 		{"SecurityPolicyList", []client.ListOption{client.MatchingLabels{LabelOwner: releaseNS}}},
+		{"EnvoyExtensionPolicyList", []client.ListOption{client.MatchingLabels{LabelOwner: releaseNS}}},
 		{"ReferenceGrantList", []client.ListOption{client.InNamespace(releaseNS)}},
 	} {
 		list := &unstructured.UnstructuredList{}
-		gv := SecurityPolicyGVK.GroupVersion()
+		gv := SecurityPolicyGVK.GroupVersion() // EnvoyExtensionPolicy shares it
 		if step.gvkList == "ReferenceGrantList" {
 			gv = ReferenceGrantGVK.GroupVersion()
 		}
@@ -90,7 +93,7 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 			obj := &list.Items[i]
 			// Only our names: the controller never adopts other objects that
 			// carry our labels, so cleanup must not delete them either.
-			if (step.gvkList == "SecurityPolicyList" && obj.GetName() != SPName(releaseNS)) ||
+			if (step.gvkList != "ReferenceGrantList" && obj.GetName() != SPName(releaseNS)) ||
 				(step.gvkList == "ReferenceGrantList" && !strings.HasPrefix(obj.GetName(), grantPrefix)) {
 				continue
 			}

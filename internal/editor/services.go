@@ -22,6 +22,7 @@ type routeRow struct {
 	Namespace, Name string
 	Hostnames       []string
 	Conflicts       []string
+	Via             string
 }
 
 type serviceForm struct {
@@ -167,7 +168,8 @@ func (s *Server) matchedRoutes(r *http.Request, spec *mmv1.MaintenanceServiceSpe
 			row.Hostnames = append(row.Hostnames, string(h))
 		}
 		if verr == nil {
-			row.Conflicts = view.Conflicts[snapshot.RouteKey{Namespace: rt.Namespace, Name: rt.Name}]
+			key := snapshot.RouteKey{Namespace: rt.Namespace, Name: rt.Name}
+			row.Conflicts, row.Via = view.Conflicts[key], view.Via[key]
 		}
 		out = append(out, row)
 	}

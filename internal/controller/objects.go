@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -20,11 +22,14 @@ const (
 
 var (
 	SecurityPolicyGVK = schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "SecurityPolicy"}
-	ReferenceGrantGVK = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1beta1", Kind: "ReferenceGrant"}
+	// ExtensionPolicyGVK is the fallback for routes whose SecurityPolicy slot
+	// another policy holds (§5.3).
+	ExtensionPolicyGVK = schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "EnvoyExtensionPolicy"}
+	ReferenceGrantGVK  = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1beta1", Kind: "ReferenceGrant"}
 )
 
 // SPName is our SecurityPolicy's name in every app namespace:
-// mm-<hash8(release namespace)>.
+// mm-<hash8(release namespace)>. Our EnvoyExtensionPolicy has the same name.
 func SPName(releaseNS string) string { return "mm-" + snapshot.Hash8(releaseNS) }
 
 // GrantName is the ReferenceGrant for an app namespace, in the release
@@ -53,19 +58,74 @@ func spSpec(releaseNS string, targets []string) map[string]any {
 			"includeRouteMetadata": true,
 			"headersToExtAuth":     []any{"accept", "accept-language", "cookie", "x-maintenance-manager-bypass"},
 			"grpc": map[string]any{
-				"backendRefs": []any{map[string]any{"name": serviceName, "namespace": releaseNS, "port": int64(authzPort)}},
-				"backendSettings": map[string]any{
-					"healthCheck": map[string]any{
-						"passive": map[string]any{
-							"consecutiveGatewayErrors": int64(3),
-							"interval":                 "2s",
-							"baseEjectionTime":         "10s",
-						},
-					},
-				},
+				"backendRefs":     []any{map[string]any{"name": serviceName, "namespace": releaseNS, "port": int64(authzPort)}},
+				"backendSettings": backendSettings(),
 			},
 		},
 	}
+}
+
+// RouteNameAttribute is the Envoy attribute that names the matched route in
+// an ext_proc request; authz parses the HTTPRoute out of it (§6.1).
+const RouteNameAttribute = "xds.route_name"
+
+// eepSpec is the EnvoyExtensionPolicy spec of §5.1: one ext_proc filter that
+// asks authz about the request headers, the same backend and fail-open as
+// the SecurityPolicy, and the response headers only when authz asks for them
+// (allowModeOverride). No mergeType: Envoy Gateway 1.8 has none for
+// EnvoyExtensionPolicies, so a parent one is a conflict instead (§5.3).
+func eepSpec(releaseNS string, targets []string) map[string]any {
+	refs := make([]any, 0, len(targets))
+	for _, t := range targets {
+		refs = append(refs, map[string]any{"group": gatewayGroup, "kind": "HTTPRoute", "name": t})
+	}
+	return map[string]any{
+		"targetRefs": refs,
+		"extProc": []any{map[string]any{
+			"backendRefs":     []any{map[string]any{"name": serviceName, "namespace": releaseNS, "port": int64(authzPort)}},
+			"backendSettings": extBackendSettings(),
+			"messageTimeout":  "100ms",
+			"failOpen":        true,
+			"processingMode": map[string]any{
+				"request":           map[string]any{"attributes": []any{RouteNameAttribute}},
+				"response":          map[string]any{},
+				"allowModeOverride": true,
+			},
+		}},
+	}
+}
+
+// backendSettings is the passive health check both policies use.
+func backendSettings() map[string]any {
+	return map[string]any{
+		"healthCheck": map[string]any{
+			"passive": map[string]any{
+				"consecutiveGatewayErrors": int64(3),
+				"interval":                 "2s",
+				"baseEjectionTime":         "10s",
+			},
+		},
+	}
+}
+
+// extBackendSettings adds a high circuit-breaker limit to the health check:
+// a banner request holds its ext_proc stream until the app answers, and
+// Envoy's default of 1024 parallel requests per cluster would let everything
+// beyond that pass unchecked (fail-open), blocked requests included (§6.1).
+func extBackendSettings() map[string]any {
+	s := backendSettings()
+	s["circuitBreaker"] = map[string]any{"maxParallelRequests": int64(65536), "maxPendingRequests": int64(65536)}
+	return s
+}
+
+// DesiredEEP is our EnvoyExtensionPolicy for an app namespace.
+func DesiredEEP(releaseNS, appNS string, targets []string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{"spec": eepSpec(releaseNS, targets)}}
+	u.SetGroupVersionKind(ExtensionPolicyGVK)
+	u.SetNamespace(appNS)
+	u.SetName(SPName(releaseNS))
+	u.SetLabels(ownerLabels(releaseNS))
+	return u
 }
 
 // DesiredSP is our SecurityPolicy for an app namespace.
@@ -78,11 +138,15 @@ func DesiredSP(releaseNS, appNS string, targets []string) *unstructured.Unstruct
 	return u
 }
 
-// DesiredGrant lets SecurityPolicies in appNS reference our Service.
+// DesiredGrant lets our SecurityPolicy and EnvoyExtensionPolicy in appNS
+// reference our Service.
 func DesiredGrant(releaseNS, appNS string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
-		"from": []any{map[string]any{"group": "gateway.envoyproxy.io", "kind": "SecurityPolicy", "namespace": appNS}},
-		"to":   []any{map[string]any{"group": "", "kind": "Service", "name": serviceName}},
+		"from": []any{
+			map[string]any{"group": "gateway.envoyproxy.io", "kind": "SecurityPolicy", "namespace": appNS},
+			map[string]any{"group": "gateway.envoyproxy.io", "kind": "EnvoyExtensionPolicy", "namespace": appNS},
+		},
+		"to": []any{map[string]any{"group": "", "kind": "Service", "name": serviceName}},
 	}}}
 	u.SetGroupVersionKind(ReferenceGrantGVK)
 	u.SetNamespace(releaseNS)
@@ -91,18 +155,28 @@ func DesiredGrant(releaseNS, appNS string) *unstructured.Unstructured {
 	return u
 }
 
-// specAllowed lists, per path, the keys our objects may carry. Anything
-// else under spec was added by someone else and is removed on the next
-// reconcile (§5.1 drift), e.g. extAuth.bodyToExtAuth.
-var specAllowed = map[string]map[string]bool{
-	"":        {"mergeType": true, "targetRefs": true, "extAuth": true},
-	"extAuth": {"failOpen": true, "timeout": true, "includeRouteMetadata": true, "headersToExtAuth": true, "grpc": true},
+// specAllowed lists, per kind and path, the keys our policies may carry.
+// Anything else under spec was added by someone else and is removed on the
+// next reconcile (§5.1 drift), e.g. extAuth.bodyToExtAuth or a request body
+// processing mode.
+var specAllowed = map[string]map[string]map[string]bool{
+	"SecurityPolicy": {
+		"":        {"mergeType": true, "targetRefs": true, "extAuth": true},
+		"extAuth": {"failOpen": true, "timeout": true, "includeRouteMetadata": true, "headersToExtAuth": true, "grpc": true},
+	},
+	"EnvoyExtensionPolicy": {
+		"":        {"targetRefs": true, "extProc": true},
+		"extProc": {"backendRefs": true, "backendSettings": true, "messageTimeout": true, "failOpen": true, "processingMode": true},
+		// Inside processingMode only the request attributes, an empty
+		// response (send the headers) and the override are ours.
+		"extProc.processingMode": {"request": true, "response": true, "allowModeOverride": true},
+	},
 }
 
 // needsUpdate reports whether an existing object differs from the desired
 // one: a desired field is missing or different, an owner label is off, or
-// the SecurityPolicy spec carries a key we do not set. Fields the API server
-// added (defaults) inside our structures are tolerated.
+// a policy spec carries a key we do not set. Fields the API server added
+// (defaults) inside other structures are tolerated.
 func needsUpdate(existing, desired *unstructured.Unstructured, strict bool) bool {
 	for k, v := range desired.GetLabels() {
 		if existing.GetLabels()[k] != v {
@@ -115,20 +189,57 @@ func needsUpdate(existing, desired *unstructured.Unstructured, strict bool) bool
 		return true
 	}
 	if strict {
-		for k := range es {
-			if !specAllowed[""][k] {
-				return true
+		allowed := specAllowed[desired.GetKind()]
+		for path, keys := range allowed {
+			for _, m := range mapsAt(es, path) {
+				for k := range m {
+					if !keys[k] {
+						return true
+					}
+				}
 			}
 		}
-		if ext, ok := es["extAuth"].(map[string]any); ok {
-			for k := range ext {
-				if !specAllowed["extAuth"][k] {
-					return true
+		// processingMode.request/response: anything but attributes is a body
+		// mode someone else added.
+		for _, pm := range mapsAt(es, "extProc.processingMode") {
+			for _, dir := range []string{"request", "response"} {
+				if m, ok := pm[dir].(map[string]any); ok {
+					for k := range m {
+						if k != "attributes" || dir == "response" {
+							return true
+						}
+					}
 				}
 			}
 		}
 	}
 	return false
+}
+
+// mapsAt returns the maps at a dotted path under spec, descending into every
+// element of a list on the way ("" is spec itself).
+func mapsAt(spec map[string]any, path string) []map[string]any {
+	cur := []map[string]any{spec}
+	if path == "" {
+		return cur
+	}
+	for _, key := range strings.Split(path, ".") {
+		var next []map[string]any
+		for _, m := range cur {
+			switch v := m[key].(type) {
+			case map[string]any:
+				next = append(next, v)
+			case []any:
+				for _, e := range v {
+					if em, ok := e.(map[string]any); ok {
+						next = append(next, em)
+					}
+				}
+			}
+		}
+		cur = next
+	}
+	return cur
 }
 
 // subset reports whether every value in want is present and equal in have.

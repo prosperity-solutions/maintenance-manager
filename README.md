@@ -34,8 +34,20 @@ You describe three things as custom resources, usually in the editor:
 Fifteen minutes before a window starts, maintenance-manager attaches one
 SecurityPolicy per app namespace to the matching routes, so Envoy asks it about
 every request; after the window it removes it. Its policy merges with
-Gateway-level policies your platform already has, and it steps aside (reported
-as a conflict) where another auth policy targets the route.
+Gateway-level policies your platform already has.
+
+**When your platform already puts a policy on a route.** Envoy Gateway allows
+one SecurityPolicy per route, and some platforms take that slot on every route
+(for example with an IP allowlist). Such routes are armed through an
+EnvoyExtensionPolicy instead, a different kind of policy that asks
+maintenance-manager the same question in another protocol (ext_proc). The
+editor shows them as armed "(extension policy)". Two differences: the
+platform's own authentication on the route (OIDC, JWT, basic auth, an external
+auth service, API keys) answers before maintenance-manager, so anonymous users
+see its login, not your page, and an external auth service sees the bypass
+header before it is removed; and maintenance-manager receives every request
+header, not only the ones it reads. Only a route where the platform also holds the
+extension slot is left alone, and shown as a conflict.
 
 ## Install
 
@@ -58,14 +70,17 @@ The chart pins the image by digest; the same `gh attestation verify` with
 checks the image. More in [docs/security.md](docs/security.md).
 
 **Uninstall:** `helm uninstall mm -n maintenance-manager`. A pre-delete hook
-removes every SecurityPolicy and ReferenceGrant it created; your windows, pages
-and services stay (the CRDs are kept). If the hook fails, run the uninstall
-again; `--no-hooks` leaves the policies behind.
+removes every SecurityPolicy, EnvoyExtensionPolicy and ReferenceGrant it
+created; your windows, pages and services stay (the CRDs are kept). If the hook
+fails, run the uninstall again; `--no-hooks` leaves the policies behind. Going
+back to a version before the extension policy existed leaves those behind too:
+`kubectl delete envoyextensionpolicy -A -l
+maintenance-manager.oss.life.li/owner=<release namespace>` removes them.
 
 ### The 60-second drain
 
-Envoy Gateway adds one filter per SecurityPolicy to the listener, so attaching
-or removing one changes the listener, and Envoy drains it: open connections
+Envoy Gateway adds one filter per policy to the listener, so attaching or
+removing one changes the listener, and Envoy drains it: open connections
 close gracefully over 60 seconds and reconnect. For plain HTTP that is the whole
 port; for HTTPS it is that host's TLS chain. Normal requests do not notice;
 WebSockets and server-sent events reconnect. This happens when a window arms
@@ -163,7 +178,7 @@ stylesheet, not inline CSS.
 - **Metrics** on `:8081/metrics` (Prometheus), all prefixed
   `maintenance_manager_`, with no per-host, per-route or per-window labels:
   `check_total{result}` (pass, banner, interstitial_page, interstitial_pass,
-  block_html, block_problem, status, bypass, not_ready),
+  block_html, block_problem, status, bypass, not_ready, error),
   `snapshot_builds_total`, `snapshot_build_seconds`, `snapshot_routes`,
   `snapshot_timestamp_seconds`, `controller_leader`,
   `controller_reconciles_total{result}`, `controller_writes_total`,

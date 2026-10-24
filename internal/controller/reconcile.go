@@ -66,14 +66,16 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	d := ComputeDesired(in)
 	actions := Plan(d, actual)
 	res := Result{Desired: d, Actions: actions}
-	// A failed write affects only its namespace: that namespace's later steps
-	// are skipped (so a policy never goes out without its grant, and a grant
-	// is never deleted while its policy may remain); every other namespace
-	// carries on. One tenant's broken object cannot stall the cluster.
+	// A failed write affects only its namespace, and within it only its
+	// policy kind: a failed grant skips both policies (never one without its
+	// grant), a failed policy step skips the grant deletion (never a grant
+	// deleted while a policy may remain), and the other kind carries on.
+	// Every other namespace carries on: one tenant's broken object cannot
+	// stall the cluster.
 	failed := map[string]bool{}
 	var errs []error
 	for _, a := range actions {
-		if failed[a.Namespace] {
+		if skipAfterFailure(failed, a) {
 			continue
 		}
 		wrote, err := r.apply(ctx, a, existing)
@@ -81,18 +83,41 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 			res.Writes++
 		}
 		if err != nil {
-			failed[a.Namespace] = true
+			failed[failureKey(a)] = true
 			errs = append(errs, fmt.Errorf("%s %s: %w", a.Kind, a.Namespace, err))
 		}
 	}
 	return res, errors.Join(errs...)
 }
 
-// existingObjects holds our current SecurityPolicies (by app ns) and grants
-// (by app ns) as unstructured objects.
+// failureKey is the scope a failed step blocks: the namespace for a grant,
+// the namespace and kind for a policy.
+func failureKey(a Action) string {
+	switch a.Kind {
+	case EnsureSP, DeleteSP:
+		return a.Namespace + "/sp"
+	case EnsureEEP, DeleteEEP:
+		return a.Namespace + "/eep"
+	}
+	return a.Namespace
+}
+
+func skipAfterFailure(failed map[string]bool, a Action) bool {
+	if failed[a.Namespace] {
+		return true
+	}
+	if a.Kind == DeleteGrant {
+		return failed[a.Namespace+"/sp"] || failed[a.Namespace+"/eep"]
+	}
+	return failed[failureKey(a)]
+}
+
+// existingObjects holds our current SecurityPolicies, EnvoyExtensionPolicies
+// and grants, by app namespace, as unstructured objects.
 type existingObjects struct {
-	policies map[string]*unstructured.Unstructured
-	grants   map[string]*unstructured.Unstructured
+	policies   map[string]*unstructured.Unstructured
+	extensions map[string]*unstructured.Unstructured
+	grants     map[string]*unstructured.Unstructured
 }
 
 func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, error) {
@@ -101,13 +126,14 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		services   mmv1.MaintenanceServiceList
 		routes     gwapiv1.HTTPRouteList
 		sps        egv1a1.SecurityPolicyList
+		eeps       egv1a1.EnvoyExtensionPolicyList
 		gateways   gwapiv1.GatewayList
 		grants     unstructured.UnstructuredList
 		namespaces corev1.NamespaceList
 	)
 	grants.SetGroupVersionKind(ReferenceGrantGVK.GroupVersion().WithKind("ReferenceGrantList"))
 	inNS := client.InNamespace(r.Namespace)
-	ex := existingObjects{policies: map[string]*unstructured.Unstructured{}, grants: map[string]*unstructured.Unstructured{}}
+	ex := existingObjects{policies: map[string]*unstructured.Unstructured{}, extensions: map[string]*unstructured.Unstructured{}, grants: map[string]*unstructured.Unstructured{}}
 	for _, l := range []struct {
 		reader client.Reader
 		list   client.ObjectList
@@ -117,6 +143,7 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		{r.Shared, &services, []client.ListOption{inNS}},
 		{r.Shared, &routes, nil},
 		{r.Leader, &sps, nil},
+		{r.Leader, &eeps, nil},
 		{r.Leader, &gateways, nil},
 		{r.Leader, &namespaces, nil},
 		{r.Leader, &grants, []client.ListOption{inNS}},
@@ -133,6 +160,8 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		ListenerSetLabels: map[types.NamespacedName]map[string]string{},
 		NamespaceLabels:   map[string]map[string]string{},
 		Blocked:           map[string]string{},
+		BlockedExt:        map[string]string{},
+		ExtArmed:          map[snapshot.RouteKey]bool{},
 	}
 	for _, n := range namespaces.Items {
 		in.NamespaceLabels[n.Name] = n.Labels
@@ -155,7 +184,7 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		readListenerSets(in, l)
 	}
 
-	actual := Actual{Policies: map[string]bool{}, Grants: map[string]bool{}}
+	actual := Actual{Policies: map[string]bool{}, Extensions: map[string]bool{}, Grants: map[string]bool{}}
 	for i := range sps.Items {
 		sp := &sps.Items[i]
 		// Ours means our name AND our owner label (a lost managed-by label is
@@ -174,6 +203,28 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 			ex.policies[sp.Namespace] = u
 		}
 		in.Policies = append(in.Policies, parsePolicy(sp, ours))
+	}
+	for i := range eeps.Items {
+		eep := &eeps.Items[i]
+		ours := eep.Name == SPName(r.Namespace) && eep.Labels[LabelOwner] == r.Namespace
+		if !ours && eep.Name == SPName(r.Namespace) {
+			in.BlockedExt[eep.Namespace] = fmt.Sprintf("an EnvoyExtensionPolicy %s/%s that is not ours has our name; maintenance-manager cannot arm this namespace through one until it is renamed or removed", eep.Namespace, eep.Name)
+		}
+		p := parseTargets(eep.Namespace, eep.Name, ours, eep.Spec.PolicyTargetReferences)
+		if ours {
+			u, err := toUnstructured(eep, ExtensionPolicyGVK.Kind)
+			if err != nil {
+				return Input{}, Actual{}, ex, err
+			}
+			actual.Extensions[eep.Namespace] = true
+			ex.extensions[eep.Namespace] = u
+			for _, ref := range p.Refs {
+				if ref.Kind == "HTTPRoute" {
+					in.ExtArmed[snapshot.RouteKey{Namespace: eep.Namespace, Name: ref.Name}] = true
+				}
+			}
+		}
+		in.Extensions = append(in.Extensions, p)
 	}
 	// The release namespace is ours, and so is every mm-from-<ns> grant in it,
 	// whatever its labels or spec say: keying by name lets the update repair
@@ -223,15 +274,22 @@ func toUnstructured(obj runtime.Object, kind string) (*unstructured.Unstructured
 }
 
 // parsePolicy extracts targets, selectors and extAuth from a SecurityPolicy.
+func parsePolicy(sp *egv1a1.SecurityPolicy, ours bool) Policy {
+	p := parseTargets(sp.Namespace, sp.Name, ours, sp.Spec.PolicyTargetReferences)
+	p.ExtAuth = sp.Spec.ExtAuth != nil
+	return p
+}
+
+// parseTargets extracts the targets and selectors of a policy.
 // GetTargetRefs covers the deprecated singular targetRef too. A selector
 // that does not parse matches nothing, as in Envoy Gateway; an empty one
 // matches everything.
-func parsePolicy(sp *egv1a1.SecurityPolicy, ours bool) Policy {
-	p := Policy{Namespace: sp.Namespace, Name: sp.Name, Ours: ours, ExtAuth: sp.Spec.ExtAuth != nil}
-	for _, ref := range sp.Spec.GetTargetRefs() {
+func parseTargets(ns, name string, ours bool, refs egv1a1.PolicyTargetReferences) Policy {
+	p := Policy{Namespace: ns, Name: name, Ours: ours}
+	for _, ref := range refs.GetTargetRefs() {
 		p.Refs = append(p.Refs, TargetRef{Group: string(ref.Group), Kind: string(ref.Kind), Name: string(ref.Name)})
 	}
-	for _, s := range sp.Spec.TargetSelectors {
+	for _, s := range refs.TargetSelectors {
 		sel, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: s.MatchLabels, MatchExpressions: s.MatchExpressions})
 		if err != nil {
 			continue

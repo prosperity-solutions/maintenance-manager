@@ -144,6 +144,23 @@ func getSP(t *testing.T, ns string) *egv1a1.SecurityPolicy {
 	return &sp
 }
 
+func getEEP(t *testing.T, ns string) *egv1a1.EnvoyExtensionPolicy {
+	t.Helper()
+	var eep egv1a1.EnvoyExtensionPolicy
+	if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: SPName(releaseNS)}, &eep); err != nil {
+		return nil
+	}
+	return &eep
+}
+
+func extTargets(eep *egv1a1.EnvoyExtensionPolicy) string {
+	var out []string
+	for _, r := range eep.Spec.TargetRefs {
+		out = append(out, string(r.Name))
+	}
+	return strings.Join(out, ",")
+}
+
 func targets(sp *egv1a1.SecurityPolicy) string {
 	var out []string
 	for _, r := range sp.Spec.TargetRefs {
@@ -194,19 +211,37 @@ func TestEnvtestArmConflictDriftDisarm(t *testing.T) {
 		t.Fatal("a no-op reconcile changed the policy")
 	}
 
-	// Conflict: a foreign policy on "web" removes it from our targets with an
-	// update (RDS-only), never a delete.
+	// A foreign policy on "web" moves it from our SecurityPolicy (an update,
+	// RDS-only, never a delete) to our EnvoyExtensionPolicy.
 	foreign := &egv1a1.SecurityPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "jwt"}}
 	foreign.Spec.TargetRefs = []gwapiv1.LocalPolicyTargetReferenceWithSectionName{{LocalPolicyTargetReference: gwapiv1.LocalPolicyTargetReference{Group: gatewayGroup, Kind: "HTTPRoute", Name: "web"}}}
 	foreign.Spec.CORS = &egv1a1.CORS{}
 	create(t, foreign)
 	res := reconcile(t, r)
-	if got := strings.Join(rec.take(), "; "); got != "update SecurityPolicy shop/"+SPName(releaseNS) {
-		t.Fatalf("conflict: %s", got)
+	if got := strings.Join(rec.take(), "; "); got != "update SecurityPolicy shop/"+SPName(releaseNS)+"; create EnvoyExtensionPolicy shop/"+SPName(releaseNS) {
+		t.Fatalf("move: %s", got)
 	}
-	if targets(getSP(t, "shop")) != "api" || len(res.Desired.Conflicts) != 1 {
-		t.Fatalf("after conflict: targets %s, conflicts %v", targets(getSP(t, "shop")), res.Desired.Conflicts)
+	eep := getEEP(t, "shop")
+	if targets(getSP(t, "shop")) != "api" || eep == nil || extTargets(eep) != "web" || len(res.Desired.Conflicts) != 0 {
+		t.Fatalf("after the move: SecurityPolicy %s, EnvoyExtensionPolicy %v, conflicts %v", targets(getSP(t, "shop")), eep, res.Desired.Conflicts)
 	}
+	// The API server accepts what we write, and a second reconcile is a no-op.
+	reconcile(t, r)
+	if ops := rec.take(); len(ops) != 0 {
+		t.Fatalf("a no-op reconcile wrote: %v", ops)
+	}
+
+	// Drift on the EnvoyExtensionPolicy: a request body mode is removed.
+	buffered := egv1a1.BufferedExtProcBodyProcessingMode
+	eep.Spec.ExtProc[0].ProcessingMode.Request.Body = &buffered
+	if err := k8s.Update(t.Context(), eep); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r)
+	if getEEP(t, "shop").Spec.ExtProc[0].ProcessingMode.Request.Body != nil {
+		t.Fatal("the request body mode was not removed")
+	}
+	rec.take()
 
 	// Drift: someone adds bodyToExtAuth; the next reconcile removes it.
 	sp = getSP(t, "shop")
@@ -226,7 +261,7 @@ func TestEnvtestArmConflictDriftDisarm(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcile(t, r)
-	if got := strings.Join(rec.take(), "; "); got != "delete SecurityPolicy shop/"+SPName(releaseNS)+"; delete ReferenceGrant mm/mm-from-shop" {
+	if got := strings.Join(rec.take(), "; "); got != "delete SecurityPolicy shop/"+SPName(releaseNS)+"; delete EnvoyExtensionPolicy shop/"+SPName(releaseNS)+"; delete ReferenceGrant mm/mm-from-shop" {
 		t.Fatalf("disarm order: %s", got)
 	}
 }
@@ -260,8 +295,9 @@ func TestEnvtestGCLeavesOthersAlone(t *testing.T) {
 
 func TestEnvtestCleanup(t *testing.T) {
 	sp := DesiredSP(releaseNS, "shop", []string{"web"})
+	eep := DesiredEEP(releaseNS, "shop", []string{"api"})
 	grant := DesiredGrant(releaseNS, "shop")
-	for _, o := range []*unstructured.Unstructured{sp, grant} {
+	for _, o := range []*unstructured.Unstructured{sp, eep, grant} {
 		if err := k8s.Create(t.Context(), o); err != nil {
 			t.Fatal(err)
 		}
@@ -282,8 +318,8 @@ func TestEnvtestCleanup(t *testing.T) {
 	if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(d), d); err != nil || *d.Spec.Replicas != 0 {
 		t.Fatalf("Deployment not scaled to 0: %v", err)
 	}
-	if getSP(t, "shop") != nil {
-		t.Fatal("our SecurityPolicy survived cleanup")
+	if getSP(t, "shop") != nil || getEEP(t, "shop") != nil {
+		t.Fatal("our policies survived cleanup")
 	}
 	var g gwapiv1b1.ReferenceGrant
 	if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: releaseNS, Name: "mm-from-shop"}, &g); err == nil {
