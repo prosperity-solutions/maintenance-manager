@@ -87,6 +87,10 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rv := r.PostFormValue("resourceVersion")
+	if rv == "" {
+		s.fail(w, r, http.StatusBadRequest, "the form carries no resourceVersion; reload the page and try again")
+		return
+	}
 	spec, ps := DecodeService(r.PostForm, &obj.Spec)
 	if len(ps) == 0 {
 		ps = ValidateServiceForm(&spec)

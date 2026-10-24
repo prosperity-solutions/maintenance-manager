@@ -146,6 +146,23 @@ func TestE11Editor(t *testing.T) {
 		t.Fatalf("the dashboard must list the window: %v", r)
 	}
 
+	// An update (with its resourceVersion) and the Disable merge patch,
+	// against the real API server.
+	upd := url.Values{"resourceVersion": {svc.ResourceVersion}, "sel0.key": {"e2e.maintenance-manager.oss.life.li/app"}, "sel0.value": {"e11-other"}}
+	if r := editor(http.MethodPost, "/services/e11-svc", upd, nil); r.status != http.StatusSeeOther {
+		t.Fatalf("update: want 303, got %v", r)
+	}
+	if r := editor(http.MethodPost, "/services/e11-svc", upd, nil); r.status != http.StatusConflict {
+		t.Fatalf("a stale update: want 409, got %v", r)
+	}
+	if r := editor(http.MethodPost, "/windows/e11-win/enabled", url.Values{"enabled": {"off"}}, nil); r.status != http.StatusSeeOther {
+		t.Fatalf("disable: want 303, got %v", r)
+	}
+	if err := kc.Get(t.Context(), client.ObjectKey{Namespace: mmNamespace, Name: "e11-svc"}, &svc); err != nil ||
+		svc.Spec.RouteSelector.MatchLabels["e2e.maintenance-manager.oss.life.li/app"] != "e11-other" {
+		t.Fatalf("updated service: %v %+v", err, svc.Spec)
+	}
+
 	// Delete through the forms: the page and service are refused while the
 	// window uses them.
 	for _, p := range []string{"/services/e11-svc/delete", "/pages/e11-page/delete"} {

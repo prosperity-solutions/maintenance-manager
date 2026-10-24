@@ -215,7 +215,7 @@ func DecodePage(v url.Values) (mmv1.MaintenancePageSpec, []snapshot.Problem) {
 		case "tag":
 			rowAt(rows, i).tag = first(vals)
 		case "title":
-			rowAt(rows, i).title = firstRaw(vals)
+			rowAt(rows, i).title = lf(firstRaw(vals))
 		case "message":
 			rowAt(rows, i).message = lf(firstRaw(vals))
 		}
@@ -452,10 +452,11 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 		for _, j := range sortedRows(&p, r.routings, f+".r0.services", maxRoutings) {
 			rr := r.routings[j]
 			if len(rr.services) == 0 {
-				if rr.page != "" {
-					p.add(f+".r"+strconv.Itoa(n)+".services", "a routing with a page needs at least one service")
+				if rr.page == "" {
+					continue
 				}
-				continue
+				// Kept (the save is refused anyway) so the form shows it again.
+				p.add(f+".r"+strconv.Itoa(n)+".services", "a routing with a page needs at least one service")
 			}
 			rf := f + ".r" + strconv.Itoa(n) + "."
 			n++

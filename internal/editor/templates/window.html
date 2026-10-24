@@ -15,7 +15,7 @@
 <label>Order <input name="p{{$p.I}}.order" value="{{$p.Order}}" size="3"></label>
 <label>Name <input name="p{{$p.I}}.name" value="{{$p.Name}}" size="20"></label>
 <label>Starts at <input type="datetime-local" step="1" name="p{{$p.I}}.startsAt" value="{{$p.StartsAt}}"></label><input type="hidden" name="p{{$p.I}}.startsAtWas" value="{{$p.StartsAtWas}}">
-<label>Action <select name="p{{$p.I}}.action">{{range $.D.Actions}}<option{{if eq . $p.Action}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Action <select name="p{{$p.I}}.action">{{range $p.Actions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (invalid){{end}}</option>{{end}}</select></label>
 {{if $p.Display}}<span class="muted">{{$p.Display}}</span>{{end}}
 {{range $f := (printf "p%d.order p%d.name p%d.startsAt p%d.action" $p.I $p.I $p.I $p.I | fields)}}{{template "fielderr" index $.D.Errors $f}}{{end}}
 {{range $r := $p.Routings}}<div>Routing: <label>Services <select multiple size="3" name="p{{$p.I}}.r{{$r.J}}.services">{{range $r.Services}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (missing){{end}}</option>{{end}}</select></label>

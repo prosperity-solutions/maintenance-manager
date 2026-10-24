@@ -331,7 +331,7 @@ func TestWindowFormRoundTripThroughHTML(t *testing.T) {
 
 func TestPageFormRoundTripThroughHTML(t *testing.T) {
 	spec := mmv1.MaintenancePageSpec{FallbackLocale: "de", HTML: "\n<h1>{{.Title}}</h1>\n\n<p>{{.Message}}</p>\n",
-		Locales: map[string]mmv1.PageText{"de": {Title: "Gleich zurück", Message: "\nZeile 1\nZeile 2\n"}, "en": {Title: "<b>Back</b> & soon"}}}
+		Locales: map[string]mmv1.PageText{"de": {Title: "Gleich zurück", Message: "\nZeile 1\nZeile 2\n"}, "en": {Title: "<b>Back</b> & soon\nsecond line"}}}
 	s, c := newServer(t, &mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "p"}, Spec: spec})
 	h := s.Handler()
 	w := do(t, h, http.MethodGet, "/pages/p", nil)
@@ -799,5 +799,36 @@ func TestPageOnlyRoutingIsAProblem(t *testing.T) {
 	_, ps = DecodeWindow(url.Values{"p0.order": {"1"}, "p0.r0.page": {"p"}, "p1.order": {"2"}}, time.UTC)
 	if len(ps) == 0 {
 		t.Fatal("a phase row with only a page must be reported, not dropped")
+	}
+}
+
+func TestInvalidStoredValuesSurviveTheForm(t *testing.T) {
+	// An action outside the three and a duplicate service (both written with
+	// kubectl) must come back as they are: the save is refused, the window
+	// stays invalid, and nothing is quietly "fixed" into a banner.
+	spec := mmv1.MaintenanceWindowSpec{Phases: []mmv1.Phase{
+		{Name: "down", Action: "Block", Routings: []mmv1.Routing{{Services: []string{"a", "a"}}}},
+	}}
+	s, c := newServer(t, &mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "w"}, Spec: spec},
+		&mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "a"}, Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"a": "a"}}}})
+	h := s.Handler()
+	page := do(t, h, http.MethodGet, "/windows/w", nil).Body.String()
+	form := browserSubmit(t, page, "/windows/w")
+	if got := form["p0.action"]; len(got) != 1 || got[0] != "Block" {
+		t.Fatalf("the stored action must be submitted as is, got %v", got)
+	}
+	if got := form["p0.r0.services"]; len(got) != 2 {
+		t.Fatalf("the duplicate service must be submitted twice, got %v", got)
+	}
+	if w := do(t, h, http.MethodPost, "/windows/w", form); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an invalid window must not save: %d", w.Code)
+	}
+	var got mmv1.MaintenanceWindow
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "w"}, &got)
+	if !equality.Semantic.DeepEqual(got.Spec, spec) {
+		t.Fatalf("the window changed: %+v", got.Spec)
+	}
+	if w := do(t, h, http.MethodPost, "/windows/w", url.Values{"formTz": {"UTC"}}); w.Code != http.StatusBadRequest {
+		t.Fatalf("an update without resourceVersion: want 400, got %d", w.Code)
 	}
 }

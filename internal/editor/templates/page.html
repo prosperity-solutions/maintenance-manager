@@ -9,7 +9,8 @@
 <p><label>Fallback locale <input name="fallbackLocale" value="{{.FallbackLocale}}" size="8"></label>{{template "fielderr" index .Errors "fallbackLocale"}}</p>
 {{range $k, $r := .Rows}}<fieldset><legend>Locale</legend>
 <label>Tag <input name="l{{$k}}.tag" value="{{$r.Tag}}" size="8" placeholder="de-CH"></label>{{template "fielderr" index $.D.Errors (printf "l%d.tag" $k)}}
-<label>Title <input name="l{{$k}}.title" value="{{$r.Title}}" size="50"></label>
+<label>Title</label><textarea name="l{{$k}}.title" rows="1">
+{{$r.Title}}</textarea>
 <div><label>Message</label><textarea name="l{{$k}}.message" rows="2">
 {{$r.Message}}</textarea></div></fieldset>{{end}}
 <p class="muted">Clear a locale's tag, title and message to drop it.</p>

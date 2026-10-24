@@ -32,6 +32,7 @@ type phaseForm struct {
 	I                                          int
 	Order, Name, StartsAt, StartsAtWas, Action string
 	Display                                    string // startsAt shown with both zones
+	Actions                                    []option
 	Routings                                   []routingForm
 }
 
@@ -41,7 +42,6 @@ type windowForm struct {
 	EndsAt, EndsAtWas string
 	EndsAtDisplay     string
 	Phases            []phaseForm
-	Actions           []string
 	Errors            map[string][]string
 	All, Warnings     []snapshot.Problem
 	Notice            string
@@ -208,6 +208,10 @@ func (s *Server) updateWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rv := r.PostFormValue("resourceVersion")
+	if rv == "" {
+		s.fail(w, r, http.StatusBadRequest, "the form carries no resourceVersion; reload the page and try again")
+		return
+	}
 	sub, err := decodeWindowForm(r)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error())
@@ -371,8 +375,7 @@ func (s *Server) windowForm(r *http.Request, loc *time.Location, name, rv string
 	f := windowForm{
 		Name: name, RV: rv, FormTz: loc.String(), New: isNew, Enabled: spec.Enabled,
 		EndsAt: v.Get("endsAt"), EndsAtWas: v.Get("endsAtWas"),
-		Actions: []string{string(mmv1.ActionBanner), string(mmv1.ActionInterstitial), string(mmv1.ActionBlock)},
-		Errors:  errorsByField(ps), All: ps, Notice: notice,
+		Errors: errorsByField(ps), All: ps, Notice: notice,
 		Warnings: snapshot.Warnings(spec, svcNames, pageNames),
 	}
 	if spec.EndsAt != nil {
@@ -381,7 +384,7 @@ func (s *Server) windowForm(r *http.Request, loc *time.Location, name, rv string
 	for i, ph := range spec.Phases {
 		pre := "p" + itoa(i) + "."
 		pf := phaseForm{I: i, Order: v.Get(pre + "order"), Name: v.Get(pre + "name"), StartsAt: v.Get(pre + "startsAt"),
-			StartsAtWas: v.Get(pre + "startsAtWas"), Action: v.Get(pre + "action")}
+			StartsAtWas: v.Get(pre + "startsAtWas"), Action: v.Get(pre + "action"), Actions: actionOptions(v.Get(pre + "action"))}
 		if ph.StartsAt != nil {
 			pf.Display = FormatDisplay(ph.StartsAt.Time, loc)
 		}
@@ -393,7 +396,7 @@ func (s *Server) windowForm(r *http.Request, loc *time.Location, name, rv string
 	}
 	for k := range blankRows {
 		i := len(spec.Phases) + k
-		pf := phaseForm{I: i, Order: itoa(i + 1), Action: string(mmv1.ActionBlock)}
+		pf := phaseForm{I: i, Order: itoa(i + 1), Action: string(mmv1.ActionBlock), Actions: actionOptions(string(mmv1.ActionBlock))}
 		pf.Routings = appendBlankRoutings(nil, svcNames, pageNames)
 		f.Phases = append(f.Phases, pf)
 	}
@@ -407,6 +410,23 @@ func appendBlankRoutings(rs []routingForm, svcNames, pageNames map[string]bool) 
 	return rs
 }
 
+// actionOptions: the three actions; a stored value outside them (written
+// with kubectl; the CRD has no enum) stays selected, marked invalid, so an
+// untouched save keeps the window invalid instead of turning it into a
+// banner.
+func actionOptions(selected string) []option {
+	var out []option
+	known := false
+	for _, a := range []mmv1.Action{mmv1.ActionBanner, mmv1.ActionInterstitial, mmv1.ActionBlock} {
+		out = append(out, option{Value: string(a), Label: string(a), Selected: string(a) == selected})
+		known = known || string(a) == selected
+	}
+	if !known && selected != "" {
+		out = append([]option{{Value: selected, Label: selected, Selected: true, Missing: true}}, out...)
+	}
+	return out
+}
+
 // serviceOptions lists the selected services first, in stored order (a
 // browser submits a multi-select in option order, so this keeps the order on
 // save), including names that do not exist (marked missing, so a save keeps
@@ -415,11 +435,10 @@ func serviceOptions(selected []string, existing map[string]bool) []option {
 	var out []option
 	seen := map[string]bool{}
 	for _, s := range selected {
-		if seen[s] {
-			continue
-		}
-		seen[s] = true
+		// A duplicate stays (as a second selected option), so an invalid
+		// window is not quietly made valid by a save.
 		out = append(out, option{Value: s, Label: s, Selected: true, Missing: !existing[s]})
+		seen[s] = true
 	}
 	for _, s := range sortedKeys(existing) {
 		if !seen[s] {

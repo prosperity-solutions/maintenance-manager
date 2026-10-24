@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -75,10 +76,11 @@ type Server struct {
 	Log  *slog.Logger
 	Now  func() time.Time
 
-	viewMu  sync.Mutex
-	viewAt  time.Time
-	viewVal controller.View
-	viewErr error
+	viewMu    sync.Mutex
+	viewStale atomic.Bool // set by a write, so the memo is not reused
+	viewAt    time.Time
+	viewVal   controller.View
+	viewErr   error
 }
 
 // NeedLeaderElection: every replica serves the editor.
@@ -349,7 +351,7 @@ func (s *Server) view(ctx context.Context) (controller.View, error) {
 	}
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
-	if time.Since(s.viewAt) < viewMemo {
+	if !s.viewStale.Swap(false) && time.Since(s.viewAt) < viewMemo {
 		return s.viewVal, s.viewErr
 	}
 	// Not the first caller's context: a browser navigating away must not
@@ -383,9 +385,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg st
 // audit writes the one log line per write (§10): object, changed fields,
 // client. Behind a port-forward the client is always 127.0.0.1.
 func (s *Server) audit(r *http.Request, verb, kind, name string, before, after any) {
-	s.viewMu.Lock()
-	s.viewAt = time.Time{} // the next page shows the effect of this write
-	s.viewMu.Unlock()
+	s.viewStale.Store(true) // the next page shows the effect of this write
 	s.Log.Info("editor write", "verb", verb, "kind", kind, "name", name, "fields", changedFields(before, after), "client", clientAddr(r))
 }
 
