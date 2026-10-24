@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -62,6 +63,12 @@ func parseServe(args []string) (serveConfig, error) {
 	}
 	if cfg.Bypass != "" && len(cfg.Bypass) < 16 {
 		return cfg, errors.New("MM_BYPASS_TOKEN must be empty (bypass off) or at least 16 characters: the status endpoint would make a short token guessable")
+	}
+	if cfg.PprofAddr != "" {
+		host, _, err := net.SplitHostPort(cfg.PprofAddr)
+		if err != nil || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+			return cfg, fmt.Errorf("--pprof-addr must be a loopback address such as 127.0.0.1:6060 (reach it with kubectl port-forward), got %q: profiling the process that answers Check() from elsewhere would slow it into failing open", cfg.PprofAddr)
+		}
 	}
 	if cfg.ArmingLeadTime < 0 {
 		return cfg, fmt.Errorf("--arming-lead-time must not be negative, got %s", cfg.ArmingLeadTime)

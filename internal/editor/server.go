@@ -198,7 +198,7 @@ func (s *Server) auth(h http.Handler) http.Handler {
 		}
 		release, ok := slots.take(clientAddr(r))
 		if !ok {
-			metrics.EditorLogins.WithLabelValues("throttled").Inc()
+			metrics.EditorAuth.WithLabelValues("throttled").Inc()
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "too many login attempts; try again in a second", http.StatusTooManyRequests)
 			return
@@ -206,11 +206,11 @@ func (s *Server) auth(h http.Handler) http.Handler {
 		gotUser, got := sha256.Sum256([]byte(u)), sha256.Sum256([]byte(p))
 		if subtle.ConstantTimeCompare(gotUser[:], wantUser[:])&subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
 			release()
-			metrics.EditorLogins.WithLabelValues("ok").Inc()
+			metrics.EditorAuth.WithLabelValues("ok").Inc()
 			h.ServeHTTP(w, r)
 			return
 		}
-		metrics.EditorLogins.WithLabelValues("failed").Inc()
+		metrics.EditorAuth.WithLabelValues("failed").Inc()
 		s.Log.Warn("editor login failed", "client", clientAddr(r))
 		w.Header().Set("WWW-Authenticate", `Basic realm="maintenance-manager", charset="UTF-8"`)
 		http.Error(w, "login required (user admin)", http.StatusUnauthorized)

@@ -13,7 +13,7 @@ func TestRegisterAndNames(t *testing.T) {
 	Register(reg)
 	CheckBlockHTML.Inc()
 	EditorWrite("create")
-	EditorLogins.WithLabelValues("failed").Inc()
+	EditorAuth.WithLabelValues("failed").Inc()
 	if got := testutil.ToFloat64(CheckBlockHTML); got != 1 {
 		t.Fatalf("block_html = %v", got)
 	}

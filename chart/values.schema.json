@@ -37,7 +37,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "addr": { "type": "string", "pattern": "^([^\\s]*:[0-9]+)?$", "description": "host:port, or empty (off)." }
+        "addr": { "type": "string", "pattern": "^((127\\.0\\.0\\.1|localhost|\\[::1\\]):[0-9]{1,5})?$", "description": "A loopback host:port (reach it with kubectl port-forward), or empty (off)." }
       }
     },
     "networkPolicy": {

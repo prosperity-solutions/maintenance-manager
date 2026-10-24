@@ -31,7 +31,7 @@ var (
 	})
 	SnapshotBuildSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: ns, Name: "snapshot_build_seconds",
-		Help:    "Time to build a snapshot from the caches.",
+		Help:    "Time to build a snapshot and hand it to authz (compiling decisions and rendering pages), after listing the caches.",
 		Buckets: []float64{.001, .005, .01, .05, .1, .5, 1, 5},
 	})
 	SnapshotRoutes = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -45,7 +45,7 @@ var (
 
 	Leader = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: ns, Name: "controller_leader",
-		Help: "1 while this replica leads the controller (arms and disarms routes).",
+		Help: "1 while this replica leads the controller (arms and disarms routes). controller-runtime's leader_election_master_status reports the same Lease.",
 	})
 	reconciles = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: ns, Name: "controller_reconciles_total",
@@ -70,9 +70,9 @@ var (
 		Namespace: ns, Name: "editor_writes_total",
 		Help: "Editor writes, by verb.",
 	}, []string{"verb"})
-	EditorLogins = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: ns, Name: "editor_logins_total",
-		Help: "Editor login attempts with credentials, by result (ok, failed, throttled).",
+	EditorAuth = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns, Name: "editor_auth_total",
+		Help: "Editor requests carrying credentials (basic auth sends them on every request), by result: ok, failed, throttled.",
 	}, []string{"result"})
 )
 
@@ -82,5 +82,5 @@ func EditorWrite(verb string) { editorWrites.WithLabelValues(verb).Inc() }
 // Register adds every metric to reg (controller-runtime's metrics.Registry).
 func Register(reg prometheus.Registerer) {
 	reg.MustRegister(checks, SnapshotBuilds, SnapshotBuildSeconds, SnapshotRoutes, SnapshotTimestamp,
-		Leader, reconciles, Writes, ArmedRoutes, Conflicts, editorWrites, EditorLogins)
+		Leader, reconciles, Writes, ArmedRoutes, Conflicts, editorWrites, EditorAuth)
 }

@@ -64,7 +64,7 @@ spec:
             - serve
             - --arming-lead-time={{ .Values.armingLeadTime }}
             {{- with .Values.pprof.addr }}
-            - --pprof-addr={{ . }}
+            - --pprof-addr={{ . | quote }}
             {{- end }}
           env:
             - name: POD_NAMESPACE

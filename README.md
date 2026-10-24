@@ -39,7 +39,7 @@ as a conflict) where another auth policy targets the route.
 
 **By digest**, after verifying it was built here. Every
 [release](https://github.com/prosperity-solutions/maintenance-manager/releases)
-lists its digests with both commands ready to paste:
+lists its digests with both commands ready to paste (tested with Helm 4):
 
 ```sh
 gh attestation verify oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sha256:<chart digest> \
@@ -175,14 +175,17 @@ stylesheet, not inline CSS.
   `snapshot_timestamp_seconds`, `controller_leader`,
   `controller_reconciles_total{result}`, `controller_writes_total`,
   `controller_armed_routes`, `controller_conflicts`, `editor_writes_total{verb}`
-  and `editor_logins_total{result}`. Plus the Go runtime and controller-runtime
+  and `editor_auth_total{result}`. Plus the Go runtime and controller-runtime
   metrics.
 - **Profiling:** `--set pprof.addr=127.0.0.1:6060` serves `net/http/pprof`;
   reach it with `kubectl port-forward`. Off by default.
-- **NetworkPolicy:** `networkPolicy.enabled=true` lets only Envoy
-  (`networkPolicy.envoyNamespaces`) reach authz on port 9001, and the editor and
-  metrics only from the namespaces you list (`editorFrom`, `metricsFrom`).
-  `kubectl port-forward` and kubelet probes still work.
+- **NetworkPolicy:** `networkPolicy.enabled=true` lets only Envoy Gateway's
+  proxy pods in `networkPolicy.envoyNamespaces` reach authz on port 9001, and
+  any pod of the namespaces you list reach the editor and metrics (`editorFrom`,
+  `metricsFrom`). In Envoy Gateway's GatewayNamespace deploy mode, list the
+  Gateways' namespaces, or authz is unreachable and windows silently do nothing.
+  Traffic from a pod's own node is always allowed (kubelet probes, hostNetwork
+  pods), and `kubectl port-forward` still works.
 - **Failure:** if maintenance-manager is down, slow or misconfigured, Envoy
   lets traffic through (fail-open). Disabling a window always works, from the
   editor or with `kubectl -n maintenance-manager patch mmw <window> --type=merge

@@ -492,6 +492,13 @@ editor:
   existingSecret: ""
 bypass:
   token: ""                      # empty = bypass disabled
+pprof:
+  addr: ""                       # loopback host:port, or empty (off); since M7
+networkPolicy:                   # since M7
+  enabled: false
+  envoyNamespaces: [envoy-gateway-system]   # where EG runs its proxy pods
+  editorFrom: []                 # namespaces allowed to reach 8080
+  metricsFrom: []                # namespaces allowed to scrape 8081
 resources:
   requests: { cpu: 100m, memory: 128Mi }   # cpu ≈ peak rps × 50µs
   limits:   { memory: 512Mi }              # no CPU limit (avoid throttling)
@@ -509,7 +516,7 @@ resources:
   - a `startupProbe` with a 60 s budget
   - `GOMEMLIMIT` from `goMemLimit`
 - **One Service** `maintenance-manager`, with named ports `authz` 9001 (`appProtocol: kubernetes.io/h2c`), `editor` 8080 and `metrics` 8081.
-- ServiceAccount, ClusterRole/Binding, Role/Binding, PDB (`minAvailable: 1`), Secret, the pre-delete cleanup Job, NOTES.txt, and `values.schema.json`.
+- ServiceAccount, ClusterRole/Binding, Role/Binding, PDB (`minAvailable: 1`), Secret, the pre-delete cleanup Job, an optional NetworkPolicy (M7), NOTES.txt, and `values.schema.json`.
 
 **RBAC:**
 - **Cluster-wide:**
@@ -537,8 +544,9 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 
 **As built (M7):**
 - **Metrics** (`internal/metrics`, on controller-runtime's registry, so `:8081/metrics` also has the Go runtime and controller-runtime metrics): `check_total{result}` with pre-resolved handles (0 allocations, the bench gate still at 0), snapshot builds, duration, routes and timestamp, controller leader, reconciles, writes, armed routes and conflicts, editor writes and logins. No host, route or window labels.
-- **pprof:** `--pprof-addr` / `pprof.addr`, off by default; its runnable logs and waits on a bind failure rather than stopping the manager.
-- **NetworkPolicy** (`networkPolicy.enabled`, off by default): ingress to 9001 only from `envoyNamespaces`, to 8080 and 8081 only from `editorFrom` / `metricsFrom`; egress unrestricted. The e2e install turns it on.
+- **pprof:** `--pprof-addr` / `pprof.addr`, off by default and loopback only (schema and `serve` refuse other hosts); its runnable logs and waits on a bind failure rather than stopping the manager.
+- **NetworkPolicy** (`networkPolicy.enabled`, off by default): ingress to 9001 only from Envoy Gateway's proxy pods (`app.kubernetes.io/component: proxy`, `managed-by: envoy-gateway`) in `envoyNamespaces` (each Gateway's namespace in GatewayNamespace deploy mode), to 8080 and 8081 only from `editorFrom` / `metricsFrom`; egress unrestricted. The e2e install turns it on, and a probe checks it blocks other namespaces while a proxy-labelled pod gets through. `lint` renders and kubeconforms the chart with it on.
+- **Metrics semantics:** `controller_leader` is Inc/Dec (terms can overlap briefly) and the leader-only gauges reset when leadership ends; `editor_auth_total` counts requests carrying credentials (basic auth sends them every time).
 - **Release notes** carry the image and chart digests with the install and verify commands (validated `sha256:` digests, written from job outputs through env, never interpolated).
 - **Events RBAC dropped** (see the RBAC list above).
 - **§24's `helm template --set editor.password=x`** became `<12+ characters>`: the chart has refused shorter passwords since M5.

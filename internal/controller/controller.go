@@ -129,8 +129,14 @@ func (c *Controller) campaign(ctx context.Context, kube kubernetes.Interface) (g
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				c.Log.Info("leading: the controller arms and disarms routes")
-				metrics.Leader.Set(1)
-				defer metrics.Leader.Set(0)
+				// Inc/Dec, not Set: client-go does not wait for an old term's
+				// callback, so terms can overlap briefly.
+				metrics.Leader.Inc()
+				defer func() {
+					metrics.Leader.Dec()
+					metrics.ArmedRoutes.Set(0) // leader-only gauges: not ours any more
+					metrics.Conflicts.Set(0)
+				}()
 				// lead returns while still leading only when it gives up: stop
 				// renewing, so another replica can take over.
 				gaveUp = c.lead(ctx)

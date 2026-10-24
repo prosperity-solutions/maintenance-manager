@@ -161,6 +161,13 @@ jobs:
           # kind itself; a real API server validates our CRDs in e2e and envtest.
           scripts/dev/t kubeconform -strict -summary -kubernetes-version 1.34.12 \
             -schema-location default -skip CustomResourceDefinition "$RUNNER_TEMP/chart.yaml"
+          # Again with every optional object on: NetworkPolicy (all branches), pprof.
+          scripts/dev/t helm template mm chart --namespace mm --set editor.password=lint-password --set image.tag=v0.0.0-lint \
+            --set networkPolicy.enabled=true --set 'networkPolicy.editorFrom={envoy-gateway-system}' \
+            --set 'networkPolicy.metricsFrom={monitoring}' --set pprof.addr=127.0.0.1:6060 > "$RUNNER_TEMP/chart-all.yaml"
+          grep -q 'kind: NetworkPolicy' "$RUNNER_TEMP/chart-all.yaml"
+          scripts/dev/t kubeconform -strict -summary -kubernetes-version 1.34.12 \
+            -schema-location default -skip CustomResourceDefinition "$RUNNER_TEMP/chart-all.yaml"
           # The install must fail without an editor password.
           if out=$(scripts/dev/t helm template mm chart --set image.tag=v0.0.0-lint 2>&1); then
             echo "helm template without editor.password must fail."

@@ -28,7 +28,10 @@ networkPolicy:
   # and metrics (8081) only from the namespaces listed below (none: no pod
   # in the cluster; kubectl port-forward and kubelet probes still work).
   enabled: false
-  # Namespaces whose pods are Envoy proxies (Envoy Gateway's own by default).
+  # Namespaces where Envoy Gateway runs its proxy pods: its own namespace by
+  # default. In GatewayNamespace deploy mode the proxies run in each Gateway's
+  # namespace: list those, or authz is unreachable and traffic flows as if no
+  # window were active (fail-open).
   envoyNamespaces: [envoy-gateway-system]
   # Namespaces allowed to reach the editor, e.g. the Envoy namespace when an
   # HTTPRoute of your own points at it.
