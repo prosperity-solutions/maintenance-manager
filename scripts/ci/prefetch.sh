@@ -9,10 +9,20 @@
 # Usage: scripts/ci/prefetch.sh <tool import path>...
 set -eu
 
+[ $# -gt 0 ] || { echo "usage: scripts/ci/prefetch.sh <tool import path>..." >&2; exit 2; }
+
+fetch() {
+  go mod download || return 1
+  for tool in "$@"; do
+    # -o /dev/null: build into the cache only, never a binary in tools/.
+    go -C tools build -o /dev/null "$tool" || return 1
+  done
+}
+
 attempt=1
-until go mod download && go -C tools build "$@"; do
+until fetch "$@"; do
   if [ "$attempt" -ge 5 ]; then
-    echo "prefetch: still failing after $attempt attempts. If the log shows a refused or blocked host, add it to the job's harden-runner allowed-endpoints (docs/HANDOVER.md D1)." >&2
+    echo "prefetch: still failing after $attempt attempts. A refused or blocked host in the log means the job's harden-runner allowed-endpoints needs it (docs/HANDOVER.md D1); any other error (go.sum, compile, Go version) is not a network problem and retrying will not fix it." >&2
     exit 1
   fi
   echo "prefetch: attempt $attempt failed; retrying in $((attempt * 5)) s" >&2
