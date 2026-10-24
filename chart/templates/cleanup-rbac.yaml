@@ -1,0 +1,102 @@
+# The uninstall hook's own identity (§5.1). Created just before the Job
+# (lower hook weight) and deleted after it succeeds; the long-running pods
+# keep none of these rights.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maintenance-manager-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: maintenance-manager-cleanup
+    app.kubernetes.io/part-of: maintenance-manager
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: maintenance-manager-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: maintenance-manager
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  # Scale our Deployment to zero, then wait for its pods and its Lease.
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    resourceNames: [maintenance-manager]
+    verbs: [get, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [maintenance-manager]
+    verbs: [get]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [referencegrants]
+    verbs: [list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maintenance-manager-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: maintenance-manager
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: maintenance-manager-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: maintenance-manager-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+# Our SecurityPolicies live in app namespaces: list cluster-wide, delete ours.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maintenance-manager-cleanup
+  labels:
+    app.kubernetes.io/part-of: maintenance-manager
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [securitypolicies]
+    verbs: [list]
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [securitypolicies]
+    resourceNames: [{{ printf "mm-%s" (sha256sum .Release.Namespace | trunc 8) }}]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: maintenance-manager-cleanup
+  labels:
+    app.kubernetes.io/part-of: maintenance-manager
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maintenance-manager-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: maintenance-manager-cleanup
+    namespace: {{ .Release.Namespace }}

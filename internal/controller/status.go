@@ -27,9 +27,10 @@ func EnvoyAccepted(sp *unstructured.Unstructured) (bool, string) {
 			if typ != "Accepted" && typ != "Merged" {
 				continue
 			}
-			gen, _ := m["observedGeneration"].(int64)
-			if gen != sp.GetGeneration() {
-				return false, fmt.Sprintf("%v is for generation %d, the policy is at %d", typ, gen, sp.GetGeneration())
+			gen := asInt64(m["observedGeneration"])
+			genVal, _, _ := unstructured.NestedFieldNoCopy(sp.Object, "metadata", "generation")
+			if want := asInt64(genVal); gen != want {
+				return false, fmt.Sprintf("%v is for generation %d, the policy is at %d", typ, gen, want)
 			}
 			if status != "True" {
 				return false, fmt.Sprintf("%v=%v reason=%v: %v", typ, status, m["reason"], m["message"])
@@ -41,4 +42,16 @@ func EnvoyAccepted(sp *unstructured.Unstructured) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+// asInt64 reads a JSON number from an API-decoded (int64) or JSON-decoded
+// (float64) object.
+func asInt64(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	}
+	return 0
 }

@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,9 +34,9 @@ type Reconciler struct {
 	Log       *slog.Logger
 	Now       func() time.Time
 
-	// ListenerSets, when non-nil, is the ListenerSet list to read (only if
-	// the kind is served).
-	ListenerSets client.ObjectList
+	// ListenerSets are the ListenerSet / XListenerSet lists to read, one per
+	// served kind.
+	ListenerSets []*unstructured.UnstructuredList
 }
 
 func (r *Reconciler) now() time.Time {
@@ -63,16 +65,26 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	d := ComputeDesired(in)
 	actions := Plan(d, actual)
 	res := Result{Desired: d, Actions: actions}
+	// A failed write affects only its namespace: that namespace's later steps
+	// are skipped (so a policy never goes out without its grant, and a grant
+	// is never deleted while its policy may remain); every other namespace
+	// carries on. One tenant's broken object cannot stall the cluster.
+	failed := map[string]bool{}
+	var errs []error
 	for _, a := range actions {
+		if failed[a.Namespace] {
+			continue
+		}
 		wrote, err := r.apply(ctx, a, existing)
 		if wrote {
 			res.Writes++
 		}
 		if err != nil {
-			return res, fmt.Errorf("%s %s: %w", a.Kind, a.Namespace, err)
+			failed[a.Namespace] = true
+			errs = append(errs, fmt.Errorf("%s %s: %w", a.Kind, a.Namespace, err))
 		}
 	}
-	return res, nil
+	return res, errors.Join(errs...)
 }
 
 // existingObjects holds our current SecurityPolicies (by app ns) and grants
@@ -84,12 +96,13 @@ type existingObjects struct {
 
 func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, error) {
 	var (
-		windows  mmv1.MaintenanceWindowList
-		services mmv1.MaintenanceServiceList
-		routes   gwapiv1.HTTPRouteList
-		sps      egv1a1.SecurityPolicyList
-		gateways gwapiv1.GatewayList
-		grants   unstructured.UnstructuredList
+		windows    mmv1.MaintenanceWindowList
+		services   mmv1.MaintenanceServiceList
+		routes     gwapiv1.HTTPRouteList
+		sps        egv1a1.SecurityPolicyList
+		gateways   gwapiv1.GatewayList
+		grants     unstructured.UnstructuredList
+		namespaces corev1.NamespaceList
 	)
 	grants.SetGroupVersionKind(ReferenceGrantGVK.GroupVersion().WithKind("ReferenceGrantList"))
 	inNS := client.InNamespace(r.Namespace)
@@ -104,6 +117,7 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		{r.Shared, &routes, nil},
 		{r.Leader, &sps, nil},
 		{r.Leader, &gateways, nil},
+		{r.Leader, &namespaces, nil},
 		{r.Leader, &grants, []client.ListOption{inNS, client.MatchingLabels{LabelOwner: r.Namespace}}},
 	} {
 		if err := l.reader.List(ctx, l.list, l.opts...); err != nil {
@@ -116,6 +130,11 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		ListenerSets:      map[types.NamespacedName]types.NamespacedName{},
 		GatewayLabels:     map[types.NamespacedName]map[string]string{},
 		ListenerSetLabels: map[types.NamespacedName]map[string]string{},
+		NamespaceLabels:   map[string]map[string]string{},
+		Blocked:           map[string]string{},
+	}
+	for _, n := range namespaces.Items {
+		in.NamespaceLabels[n.Name] = n.Labels
 	}
 	for _, rt := range routes.Items {
 		in.Routes = append(in.Routes, snapshot.RouteInfo{
@@ -125,23 +144,24 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 	for _, g := range gateways.Items {
 		in.GatewayLabels[types.NamespacedName{Namespace: g.Namespace, Name: g.Name}] = g.Labels
 	}
-	if r.ListenerSets != nil {
-		if err := r.Leader.List(ctx, r.ListenerSets); err != nil {
+	for _, l := range r.ListenerSets {
+		if err := r.Leader.List(ctx, l); err != nil {
 			return Input{}, Actual{}, ex, err
 		}
-		if err := r.readListenerSets(in); err != nil {
-			return Input{}, Actual{}, ex, err
-		}
+		readListenerSets(in, l)
 	}
 
 	actual := Actual{Policies: map[string]bool{}, Grants: map[string]bool{}}
 	for i := range sps.Items {
 		sp := &sps.Items[i]
-		ours := sp.Labels[LabelOwner] == r.Namespace && sp.Labels[LabelManagedBy] == managedBy
+		// Ours means our labels AND our name. Anything else, labelled or not,
+		// is foreign and goes through the conflict check.
+		labelled := sp.Labels[LabelOwner] == r.Namespace && sp.Labels[LabelManagedBy] == managedBy
+		ours := labelled && sp.Name == SPName(r.Namespace)
+		if !labelled && sp.Name == SPName(r.Namespace) {
+			in.Blocked[sp.Namespace] = fmt.Sprintf("a SecurityPolicy %s/%s that is not ours has our name; maintenance-manager cannot arm this namespace until it is renamed or removed", sp.Namespace, sp.Name)
+		}
 		if ours {
-			if sp.Name != SPName(r.Namespace) {
-				continue // ours by label but not by name: leave it, never adopt
-			}
 			u, err := toUnstructured(sp, SecurityPolicyGVK.Kind)
 			if err != nil {
 				return Input{}, Actual{}, ex, err
@@ -157,7 +177,11 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 		if len(from) != 1 {
 			continue
 		}
-		ns, _, _ := unstructured.NestedString(from[0].(map[string]any), "namespace")
+		f0, ok := from[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		ns, _, _ := unstructured.NestedString(f0, "namespace")
 		if g.GetName() != GrantName(ns) {
 			continue
 		}
@@ -167,11 +191,7 @@ func (r *Reconciler) read(ctx context.Context) (Input, Actual, existingObjects, 
 	return in, actual, ex, nil
 }
 
-func (r *Reconciler) readListenerSets(in Input) error {
-	u, ok := r.ListenerSets.(*unstructured.UnstructuredList)
-	if !ok {
-		return errors.New("ListenerSets must be an *unstructured.UnstructuredList")
-	}
+func readListenerSets(in Input, u *unstructured.UnstructuredList) {
 	for _, ls := range u.Items {
 		key := types.NamespacedName{Namespace: ls.GetNamespace(), Name: ls.GetName()}
 		in.ListenerSetLabels[key] = ls.GetLabels()
@@ -184,7 +204,6 @@ func (r *Reconciler) readListenerSets(in Input) error {
 			in.ListenerSets[key] = types.NamespacedName{Namespace: ns, Name: name}
 		}
 	}
-	return nil
 }
 
 // toUnstructured goes through JSON, not the unstructured converter: the
@@ -222,11 +241,23 @@ func parsePolicy(sp *egv1a1.SecurityPolicy, ours bool) Policy {
 		if s.Group != nil {
 			group = string(*s.Group)
 		}
-		// from All, or from Selector (we have no RBAC on namespace labels):
-		// treated as every namespace. Over-matching means not armed, which
-		// fails open.
-		anyNS := s.Namespaces != nil && s.Namespaces.From != "" && s.Namespaces.From != egv1a1.TargetNamespaceFromSame
-		p.Selectors = append(p.Selectors, TargetSelector{Group: group, Kind: string(s.Kind), Labels: sel, AnyNamespace: anyNS})
+		ts := TargetSelector{Group: group, Kind: string(s.Kind), Labels: sel}
+		if s.Namespaces != nil {
+			switch s.Namespaces.From {
+			case egv1a1.TargetNamespaceFromAll:
+				ts.AnyNamespace = true
+			case egv1a1.TargetNamespaceFromSelector:
+				// Evaluated against namespace labels, like Envoy Gateway does; a
+				// selector that does not parse matches nothing.
+				ts.NamespaceSelector = labels.Nothing()
+				if s.Namespaces.Selector != nil {
+					if nsSel, err := metav1.LabelSelectorAsSelector(s.Namespaces.Selector); err == nil {
+						ts.NamespaceSelector = nsSel
+					}
+				}
+			}
+		}
+		p.Selectors = append(p.Selectors, ts)
 	}
 	return p
 }

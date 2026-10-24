@@ -272,11 +272,15 @@ A route is **in conflict**, and is removed from our SP's `targetRefs` (an RDS-on
 - **It targets the route.** Count `targetRefs` (with or without `sectionName`) and `targetSelectors`, including cross-namespace `targetSelectors.namespaces`, so scan SPs **cluster-wide**.
 - **It targets the route's parent Gateway, listener or ListenerSet and has its own `extAuth`.** Merging two extAuths would replace one of them, or make the config invalid, and with failOpen an invalid config silently removes the platform's auth.
 
+`targetSelectors` count with their namespace scope: `from: Same` (the default) is the SP's own namespace, `from: All` every namespace, and `from: Selector` is evaluated against namespace labels, as Envoy Gateway does. Treating `Selector` as "every namespace" would let any tenant disarm the whole cluster with a selector that matches nothing.
+
+Ownership is "our labels **and** our name": an SP with our labels but another name is foreign (conflict check, never adopted, never deleted by cleanup). A foreign SP squatting on our name in an app namespace blocks only that namespace (reported as a conflict); write errors, too, stay per namespace, so one tenant cannot stall arming elsewhere.
+
 A foreign parent SP *without* `extAuth` (JWT, OIDC, basic auth, CORS, IP rules…) is **not** a conflict. `mergeType: StrategicMerge` keeps it working, and EG reports `Merged=True`.
 
 If a foreign SP appears on an already-armed route, that route is removed within one reconcile (~1 s). Until then, oldest-wins may briefly suppress the newcomer. Document this rather than hide it.
 
-Removing a route from `targetRefs` is RDS-only **unless it was the namespace's last armed route**: then the SP is deleted, which drains the listener (§5.4), and re-arming creates it again (another drain). A quick window toggle does the same. The README says so.
+Removing a route from `targetRefs` is RDS-only **unless it was the namespace's last armed route**: then the SP is deleted, which drains the listener (§5.4), and re-arming creates it again (another drain). A quick window toggle does the same. NOTES.txt says so; the README gets it with M7.
 
 Conflicts show in red on the editor dashboard and on the service and window pages, computed live.
 
@@ -476,13 +480,14 @@ resources:
 **RBAC:**
 - **Cluster-wide:**
   - `get/list/watch` on httproutes and gateways, plus listenersets in both `gateway.networking.k8s.io` and `gateway.networking.x-k8s.io` (xlistenersets)
-  - `get/list/watch/create/update/patch/delete` on securitypolicies
+  - `get/list/watch/create` on securitypolicies, and `update/patch/delete` only on our name (`resourceNames: [mm-<hash8(release-ns)>]`, rendered with `sha256sum | trunc 8`): a compromised pod cannot rewrite or delete a platform's JWT/OIDC/extAuth policy
+  - `get/list/watch` on namespaces (`targetSelectors.namespaces.from: Selector` is evaluated against namespace labels, §5.3)
   - `create/patch` on events
 - **Release namespace:**
   - all verbs on our 3 CRDs
   - `get/list/watch/create/update/patch/delete` on referencegrants
-  - `get/list/watch/create/update/patch` on leases
-  - `get/patch` on deployments and deployments/scale (cleanup)
+  - `create` on leases, and `get/list/watch/update/patch` on the `maintenance-manager` Lease
+- **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment and its scale, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
 
 On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabled.
 
@@ -1138,7 +1143,7 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 | D3 | Whether the workflow-execution event rule affects Dependabot runs | Watch the first Dependabot PR's run; if blocked, document the impact and the owner's options. **Settled (M3):** not affected. Dependabot's first PRs (#7, #8, `tools/` bumps) ran the full CI as `pull_request` events, e2e included, and the `ship` gate exempted them by author |
 | D4 | (PAT only) Whether the PAT can read `security_and_analysis` | Try it in §21.3 verification; if not, rely on the script summary (already allowed) |
 | D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README. **Measured (M4, EG v1.9.1, kind):** our SP was Accepted about 0.5 s after the window was created; an open WebSocket on the shared listener then ended with a clean FIN (EOF, no RST) **60.1 s** after the window was created, i.e. Envoy's 60 s drain. New connections are unaffected |
-| D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does. **Measured (M4, EG v1.9.1):** the ancestor where our SP merges into a Gateway-listener SP reports **only** `Merged=True` ("Merged with policy …") and no `Accepted` condition; other ancestors report `Accepted=True`. "Envoy Accepted" (§10) is therefore: every ancestor has `Accepted=True` or `Merged=True` for the current generation (`controller.EnvoyAccepted`) |
+| D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does. **Measured (M4, EG v1.8.3 and v1.9.1, identical):** the ancestor where our SP merges into a Gateway-listener SP reports **only** `Merged=True` ("Merged with policy …") and no `Accepted` condition; other ancestors report `Accepted=True`. "Envoy Accepted" (§10) is therefore: every ancestor has `Accepted=True` or `Merged=True` for the current generation (`controller.EnvoyAccepted`) |
 | D7 | `Check()` allocation count achievable with go-control-plane protos | Benchmark; if > 2 is unavoidable in proto handling, set the gate to the measured floor and explain why. **Measured (M3):** 0 allocs/op and about 135 ns/op (block HTML with Accept-Language negotiation, laptop). Route metadata lookups, header lookups, cookie scanning, locale matching and the query split all work on the decoded request's strings without copying, and every response is a shared precomputed value. The gate stays at ≤ 2 allocs/op and < 50 µs/op (`TestCheckBudget`, run by `test` with `MM_BENCH_GATE=1`); `TestCheckAllocs` holds every hot path at ≤ 2 in plain `go test` |
 | D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers. **M3 (laptop, E1–E5 + E8, EG v1.9.1):** tools 54 s (cold build, outside the setup clock), setup 1m17s, tests about 115 s, total 3m12s; E8 alone waits about 75 s for its dated phase. **CI (M2):** about 7.3 min per leg on ubuntu-24.04 |
 | D9 | The node port and kind port mapping values | Pick fixed values in `test/e2e`, document them. **Settled (M2):** Envoy NodePort 30080 ↔ `127.0.0.1:30080` (`test/e2e/testdata/kind.yaml`, `gateway.yaml`); kind node `kindest/node:v1.35.8` by digest, the newest Kubernetes both EG 1.8 (1.32–1.35) and 1.9 (1.33–1.36) support |

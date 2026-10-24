@@ -13,4 +13,6 @@ apps as if it was not there (fail-open).
 
 One install per cluster: the CRDs and the ClusterRole are cluster-scoped, so a
 second release fails Helm's ownership check. Uninstalling keeps your windows,
-pages and services (the CRDs carry helm.sh/resource-policy: keep).
+pages and services (the CRDs carry helm.sh/resource-policy: keep), and its
+pre-delete hook removes every SecurityPolicy and ReferenceGrant it created.
+If the hook fails, run helm uninstall again; --no-hooks leaves them behind.

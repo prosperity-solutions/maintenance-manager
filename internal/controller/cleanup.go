@@ -37,7 +37,7 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 		log.Info("scaled the Deployment to 0")
 	}
 
-	if err := waitFor(ctx, 3*time.Minute, "maintenance-manager pods to stop", func() (bool, error) {
+	if err := waitFor(ctx, 90*time.Second, "maintenance-manager pods to stop", func() (bool, error) {
 		var pods corev1.PodList
 		if err := c.List(ctx, &pods, client.InNamespace(releaseNS), client.MatchingLabels{"app.kubernetes.io/name": serviceName}); err != nil {
 			return false, err
@@ -46,7 +46,7 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 	}); err != nil {
 		return err
 	}
-	if err := waitFor(ctx, time.Minute, "the leader Lease to be free", func() (bool, error) {
+	if err := waitFor(ctx, 30*time.Second, "the leader Lease to be free", func() (bool, error) {
 		var l coordinationv1.Lease
 		err := c.Get(ctx, client.ObjectKey{Namespace: releaseNS, Name: leaseName}, &l)
 		if apierrors.IsNotFound(err) {
@@ -86,6 +86,12 @@ func Cleanup(ctx context.Context, c client.Client, releaseNS string, log *slog.L
 		}
 		for i := range list.Items {
 			obj := &list.Items[i]
+			// Only our names: the controller never adopts other objects that
+			// carry our labels, so cleanup must not delete them either.
+			if ns, ok := grantNamespace(obj); (step.gvkList == "SecurityPolicyList" && obj.GetName() != SPName(releaseNS)) ||
+				(step.gvkList == "ReferenceGrantList" && (!ok || obj.GetName() != GrantName(ns))) {
+				continue
+			}
 			if err := client.IgnoreNotFound(c.Delete(ctx, obj)); err != nil {
 				return fmt.Errorf("delete %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 			}
@@ -114,4 +120,18 @@ func waitFor(ctx context.Context, timeout time.Duration, what string, f func() (
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// grantNamespace returns the single "from" namespace of one of our grants.
+func grantNamespace(g *unstructured.Unstructured) (string, bool) {
+	from, _, _ := unstructured.NestedSlice(g.Object, "spec", "from")
+	if len(from) != 1 {
+		return "", false
+	}
+	f0, ok := from[0].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	ns, _, _ := unstructured.NestedString(f0, "namespace")
+	return ns, ns != ""
 }

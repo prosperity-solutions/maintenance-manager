@@ -28,7 +28,10 @@ type TargetRef struct {
 type TargetSelector struct {
 	Group, Kind  string
 	Labels       labels.Selector
-	AnyNamespace bool // namespaces.from All or Selector: treated as every namespace
+	AnyNamespace bool // namespaces.from: All
+	// NamespaceSelector is set for namespaces.from: Selector, evaluated
+	// against namespace labels; nil means the policy's own namespace (Same).
+	NamespaceSelector labels.Selector
 }
 
 // Policy is what the conflict check needs from a SecurityPolicy.
@@ -59,8 +62,13 @@ type Input struct {
 	// GatewayLabels and ListenerSetLabels serve targetSelectors on parents.
 	GatewayLabels     map[types.NamespacedName]map[string]string
 	ListenerSetLabels map[types.NamespacedName]map[string]string
-	Now               time.Time
-	Lead              time.Duration
+	// NamespaceLabels serve namespaces.from: Selector.
+	NamespaceLabels map[string]map[string]string
+	// Blocked holds app namespaces we cannot arm, with the reason (a foreign
+	// SecurityPolicy squatting on our name).
+	Blocked map[string]string
+	Now     time.Time
+	Lead    time.Duration
 }
 
 // Desired is the arm set: per app namespace, the sorted names of its armed,
@@ -92,6 +100,10 @@ func ComputeDesired(in Input) Desired {
 		}
 	}
 	for key, r := range armed {
+		if why, blocked := in.Blocked[key.Namespace]; blocked {
+			d.Conflicts[key] = []string{why}
+			continue
+		}
 		if reasons := conflicts(r, in); len(reasons) > 0 {
 			d.Conflicts[key] = reasons
 			continue
@@ -115,7 +127,7 @@ func conflicts(r snapshot.RouteInfo, in Input) []string {
 			continue
 		}
 		name := p.Namespace + "/" + p.Name
-		if p.targets(r.Key.Namespace, "HTTPRoute", r.Key.Name, r.Labels) {
+		if p.targets(r.Key.Namespace, "HTTPRoute", r.Key.Name, r.Labels, in.NamespaceLabels) {
 			out = append(out, fmt.Sprintf("SecurityPolicy %s targets this route", name))
 			continue
 		}
@@ -127,7 +139,7 @@ func conflicts(r snapshot.RouteInfo, in Input) []string {
 			if pa.Kind == "ListenerSet" {
 				lbls = in.ListenerSetLabels[types.NamespacedName{Namespace: pa.Namespace, Name: pa.Name}]
 			}
-			if p.targets(pa.Namespace, pa.Kind, pa.Name, lbls) {
+			if p.targets(pa.Namespace, pa.Kind, pa.Name, lbls, in.NamespaceLabels) {
 				out = append(out, fmt.Sprintf("SecurityPolicy %s has extAuth on the parent %s %s/%s", name, pa.Kind, pa.Namespace, pa.Name))
 				break
 			}
@@ -138,7 +150,7 @@ func conflicts(r snapshot.RouteInfo, in Input) []string {
 
 // targets reports whether the policy targets the object, by name (any
 // sectionName) or by label selector.
-func (p Policy) targets(ns, kind, name string, lbls map[string]string) bool {
+func (p Policy) targets(ns, kind, name string, lbls map[string]string, nsLabels map[string]map[string]string) bool {
 	if ns == p.Namespace {
 		for _, ref := range p.Refs {
 			if ref.Kind == kind && ref.Name == name && (ref.Group == "" || ref.Group == gatewayGroup) {
@@ -150,7 +162,14 @@ func (p Policy) targets(ns, kind, name string, lbls map[string]string) bool {
 		if s.Kind != kind || (s.Group != "" && s.Group != gatewayGroup) {
 			continue
 		}
-		if (s.AnyNamespace || ns == p.Namespace) && s.Labels.Matches(labels.Set(lbls)) {
+		inScope := ns == p.Namespace
+		switch {
+		case s.AnyNamespace:
+			inScope = true
+		case s.NamespaceSelector != nil:
+			inScope = s.NamespaceSelector.Matches(labels.Set(nsLabels[ns]))
+		}
+		if inScope && s.Labels.Matches(labels.Set(lbls)) {
 			return true
 		}
 	}
@@ -163,7 +182,9 @@ func (p Policy) targets(ns, kind, name string, lbls map[string]string) bool {
 func parentsOf(r snapshot.RouteInfo, ls map[types.NamespacedName]types.NamespacedName) []Parent {
 	var out []Parent
 	for _, ref := range r.Parents {
-		if ref.Group != nil && string(*ref.Group) != gatewayGroup {
+		// Gateway and ListenerSet live in gateway.networking.k8s.io; the
+		// experimental XListenerSet in gateway.networking.x-k8s.io.
+		if ref.Group != nil && string(*ref.Group) != gatewayGroup && string(*ref.Group) != "gateway.networking.x-k8s.io" {
 			continue
 		}
 		kind := "Gateway"

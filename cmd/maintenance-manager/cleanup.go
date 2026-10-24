@@ -35,7 +35,7 @@ func cleanup(log *slog.Logger) int {
 		log.Error("cleanup: client", "err", err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	defer cancel()
 	if err := controller.Cleanup(ctx, c, ns, log); err != nil {
 		log.Error("cleanup failed; run it again, it is safe to repeat", "err", err)
