@@ -533,7 +533,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 - An echo backend that reflects request headers (image pinned by digest), behind HTTPRoutes carrying labels.
 
 **Our image and chart:**
-- Built with `KO_DOCKER_REPO=kind.local` (with `KIND_CLUSTER_NAME`), which loads the image straight into kind.
+- Built with `KO_DOCKER_REPO=kind.local` (with `KIND_CLUSTER_NAME`) and `ko build -B` (base import paths), which loads the image straight into kind as `kind.local/maintenance-manager`. `--bare` does not work with `kind.local`: ko fails to tag the loaded image inside the node.
 - Installed from the working tree with `image.digest=""`, a tag, and `pullPolicy: IfNotPresent`. A kind-loaded image can't be pulled by registry digest.
 
 **Before M4** (no controller yet), tests apply a fixture SP and ReferenceGrant from `test/e2e/testdata/`. M4 deletes them.
@@ -1136,8 +1136,8 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 | D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README |
 | D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does |
 | D7 | `Check()` allocation count achievable with go-control-plane protos | Benchmark; if > 2 is unavoidable in proto handling, set the gate to the measured floor and explain why |
-| D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test |
-| D9 | The node port and kind port mapping values | Pick fixed values in `test/e2e`, document them |
+| D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers |
+| D9 | The node port and kind port mapping values | Pick fixed values in `test/e2e`, document them. **Settled (M2):** Envoy NodePort 30080 ↔ `127.0.0.1:30080` (`test/e2e/testdata/kind.yaml`, `gateway.yaml`); kind node `kindest/node:v1.35.8` by digest, the newest Kubernetes both EG 1.8 (1.32–1.35) and 1.9 (1.33–1.36) support |
 | D10 | Default page look (built-in template) | Your call: plain, accessible, inline CSS, dark-mode aware, < 8 KB |
 | D11 | README wording, pitch and examples | Your call, following the voice rules in §20.2 |
 | D12 | golangci-lint linter set | Start from the outfit config, adapted; enable `gosec`, `errorlint`, `bodyclose`, `noctx` |

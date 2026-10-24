@@ -1,0 +1,54 @@
+# An app: an echo backend that reflects request headers, and an HTTPRoute
+# with a label, as a platform would create it. NAMESPACE is replaced per test.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+  namespace: NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: echo}
+  template:
+    metadata:
+      labels: {app: echo}
+    spec:
+      containers:
+        - name: echo
+          image: ealen/echo-server@sha256:006b92e1d6682442e29d1d0d73c34a61166d42f8a5bf1ea10c318f07ad4790e2
+          env:
+            - {name: PORT, value: "8080"}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /, port: 8080}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: NAMESPACE
+spec:
+  selector: {app: echo}
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+  namespace: NAMESPACE
+  labels:
+    e2e.maintenance-manager.oss.life.li/app: NAMESPACE
+spec:
+  parentRefs:
+    - name: eg
+      namespace: envoy-gateway-system
+  hostnames:
+    - NAMESPACE.example.test
+  rules:
+    - backendRefs:
+        - name: echo
+          port: 80

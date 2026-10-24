@@ -1,5 +1,8 @@
 # golangci-lint v2 (docs/HANDOVER.md D12). Run: scripts/dev/t golangci-lint run
 version: "2"
+run:
+  # Lint the tagged suites too (e2e on kind, envtest).
+  build-tags: [e2e, envtest]
 linters:
   enable:
     - bodyclose
