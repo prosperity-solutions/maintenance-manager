@@ -28,6 +28,7 @@ type serveConfig struct {
 	Namespace      string        // release namespace (POD_NAMESPACE)
 	ArmingLeadTime time.Duration // how long before a phase the routes are armed
 	MetricsAddr    string
+	BlockRoute     *authz.RouteKey // test-only, see --e2e-block-route
 }
 
 func parseServe(args []string) (serveConfig, error) {
@@ -35,8 +36,19 @@ func parseServe(args []string) (serveConfig, error) {
 	cfg := serveConfig{Namespace: os.Getenv("POD_NAMESPACE")}
 	fs.DurationVar(&cfg.ArmingLeadTime, "arming-lead-time", 15*time.Minute, "arm routes this long before a dated phase starts")
 	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", ":8081", "metrics and health address (/metrics, /healthz, /readyz)")
+	var block string
+	// Test-only (M2): blocks one route with the static page until windows
+	// exist. Not in the usage text; M3 removes it.
+	fs.StringVar(&block, "e2e-block-route", "", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
+	}
+	if block != "" {
+		k, ok := authz.ParseRouteKey(block)
+		if !ok {
+			return cfg, fmt.Errorf("--e2e-block-route wants namespace/name, got %q", block)
+		}
+		cfg.BlockRoute = &k
 	}
 	if cfg.Namespace == "" {
 		return cfg, errors.New("POD_NAMESPACE is not set; the chart sets it from the downward API")
@@ -107,7 +119,7 @@ func serve(args []string, log *slog.Logger) int {
 		return 1
 	}
 
-	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.ok.Store(false) }}
+	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.ok.Store(false) }, BlockRoute: cfg.BlockRoute}
 	if err := mgr.Add(srv); err != nil {
 		log.Error("serve: add authz", "err", err)
 		return 1

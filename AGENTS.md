@@ -40,7 +40,8 @@ try to satisfy the gate without running the workflow.
    (`feat`/`fix`/`!` release; everything else does not).
 3. Stamp every commit (`ship` Step 5).
 4. Open a **draft** PR and run the local review.
-5. `gh pr ready`.
+5. `gh pr ready`, but only after the run for your last push to the draft
+   exists; otherwise that late draft run cancels the ready run.
 6. Wait for **the ready run's jobs** (`gh run view <id> --json jobs`), never the
    rollup: a skipped job looks green.
 7. `gh pr merge --squash --delete-branch`. Never `--admin`: the token can't, and

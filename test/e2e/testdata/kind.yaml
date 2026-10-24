@@ -1,0 +1,12 @@
+# kind cluster for the e2e suite (docs/HANDOVER.md §13.2, D9). Envoy's
+# NodePort 30080 is mapped to 127.0.0.1:30080 on the host, so tests talk to
+# Envoy over real TCP, not a port-forward.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: 127.0.0.1
+        protocol: TCP

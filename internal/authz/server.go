@@ -53,12 +53,27 @@ type Server struct {
 	// Drain is how long to keep serving after OnShutdown (DrainDelay in
 	// production).
 	Drain time.Duration
+
+	// BlockRoute, when set, blocks that one route with the static page. It
+	// is the hidden --e2e-block-route flag of M2; M3 replaces it with
+	// windows.
+	BlockRoute *RouteKey
 }
 
-// Check answers whether a request may pass. Until windows exist (M3) every
-// request passes.
-func (s *Server) Check(context.Context, *authv3.CheckRequest) (*authv3.CheckResponse, error) {
-	return okResponse, nil
+// Check answers whether a request may pass. No I/O, no locks, no logging.
+// Until windows exist (M3) only the --e2e-block-route route is blocked.
+func (s *Server) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.CheckResponse, error) {
+	if s.BlockRoute == nil {
+		return okResponse, nil
+	}
+	key, ok := routeKey(req)
+	if !ok || key != *s.BlockRoute {
+		return okResponse, nil
+	}
+	if wantsHTML(req.GetAttributes().GetRequest().GetHttp()) {
+		return staticBlockHTMLResponse, nil
+	}
+	return staticBlockJSONResponse, nil
 }
 
 // NeedLeaderElection reports false: every replica answers Check().

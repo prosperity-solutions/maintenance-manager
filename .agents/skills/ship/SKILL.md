@@ -174,7 +174,11 @@ the end. Then `code-reviewer` reads the full diff once more.
 ## Step 6 — Ready, CI, merge
 
 1. Only once the review loop has exited and the pre-pass is green:
-   `gh pr ready`.
+   `gh pr ready`. **After a fresh push to the draft, first wait until its
+   `synchronize` run exists** (`gh run list --branch <b>` shows the head SHA):
+   if `ready` fires first, the late draft run lands in the same concurrency
+   group and cancels the ready run. Seen on the first PR; recovery is
+   `gh run rerun <the cancelled ready run>`.
 2. Wait for the **ready run's jobs**, never the rollup:
 
    ```sh
