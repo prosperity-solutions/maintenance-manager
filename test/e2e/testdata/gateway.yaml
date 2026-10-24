@@ -45,3 +45,12 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+    # E6 attaches a Gateway-level CORS policy to this listener only, so it
+    # neither drains nor changes the listener the other tests use.
+    - name: e6
+      protocol: HTTP
+      port: 80
+      hostname: e6.example.test
+      allowedRoutes:
+        namespaces:
+          from: All

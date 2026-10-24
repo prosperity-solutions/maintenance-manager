@@ -13,9 +13,19 @@ rules:
   - apiGroups: [gateway.networking.x-k8s.io]
     resources: [xlistenersets]
     verbs: [get, list, watch]
+  # Read every SecurityPolicy (conflicts, §5.3) and create ours; change or
+  # delete only ours, which always has this one name.
   - apiGroups: [gateway.envoyproxy.io]
     resources: [securitypolicies]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch, create]
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [securitypolicies]
+    resourceNames: [{{ printf "mm-%s" (sha256sum .Release.Namespace | trunc 8) }}]
+    verbs: [update, patch, delete]
+  # targetSelectors with namespaces.from: Selector match on namespace labels.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]

@@ -14,6 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
+
+	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -21,6 +25,7 @@ import (
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 	"github.com/prosperity-solutions/maintenance-manager/internal/authz"
+	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -60,6 +65,15 @@ func newScheme() (*runtime.Scheme, error) {
 	if err := mmv1.AddToScheme(s); err != nil {
 		return nil, err
 	}
+	if err := gwapiv1.Install(s); err != nil {
+		return nil, err
+	}
+	if err := gwapiv1b1.Install(s); err != nil {
+		return nil, err
+	}
+	if err := egv1a1.AddToScheme(s); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -88,8 +102,8 @@ func serve(args []string, log *slog.Logger) int {
 			&mmv1.MaintenanceService{}: inNS,
 			&mmv1.MaintenancePage{}:    inNS,
 			&mmv1.MaintenanceWindow{}:  inNS,
-			// HTTPRoutes: cluster-wide, metadata only, stripped (§3).
-			snapshot.NewRouteMetadata(): {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}, Transform: snapshot.StripRoute},
+			// HTTPRoutes: cluster-wide, stripped to labels and parentRefs (§3).
+			&gwapiv1.HTTPRoute{}: {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}, Transform: snapshot.StripRoute},
 		}},
 		// The default :8080 would collide with the editor (§11).
 		Metrics: metricsserver.Options{
@@ -121,6 +135,15 @@ func serve(args []string, log *slog.Logger) int {
 	srv := &authz.Server{Addr: authz.Addr, Log: log, Drain: authz.DrainDelay, OnShutdown: func() { ready.shutting.Store(true) }}
 	if err := mgr.Add(srv); err != nil {
 		log.Error("serve: add authz", "err", err)
+		return 1
+	}
+	hostname, _ := os.Hostname()
+	ctl := &controller.Controller{
+		Config: mgr.GetConfig(), Scheme: scheme, Mapper: mgr.GetRESTMapper(), Shared: mgr.GetCache(), Writer: mgr.GetClient(),
+		Namespace: cfg.Namespace, Identity: hostname, Lead: cfg.ArmingLeadTime, Log: log.With("component", "controller"),
+	}
+	if err := mgr.Add(ctl); err != nil {
+		log.Error("serve: add controller", "err", err)
 		return 1
 	}
 	builder := &snapshot.Builder{

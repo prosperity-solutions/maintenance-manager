@@ -1,6 +1,6 @@
 # Release namespace only: our resources, the ReferenceGrants that let app
-# namespaces reach our Service, the leader-election Lease, and scaling our own
-# Deployment to zero on uninstall. docs/HANDOVER.md §11.
+# namespaces reach our Service, and the leader-election Lease.
+# docs/HANDOVER.md §11.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -22,11 +22,7 @@ rules:
     resources: [leases]
     resourceNames: [maintenance-manager]
     verbs: [get, list, watch, update, patch]
-  # Our own Deployment only: the uninstall hook scales it to zero.
-  - apiGroups: [apps]
-    resources: [deployments, deployments/scale]
-    resourceNames: [maintenance-manager]
-    verbs: [get, patch]
+  # (The uninstall hook has its own ServiceAccount: cleanup-rbac.yaml.)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

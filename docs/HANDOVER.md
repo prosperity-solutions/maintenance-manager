@@ -209,7 +209,7 @@ spec:
 
 A route is **armed** when a `MaintenanceService` referenced by an armed window matches it and it has no conflict (§5.3).
 
-For each namespace with ≥ 1 armed route, the controller server-side-applies exactly one SP, with field manager `maintenance-manager`:
+For each namespace with ≥ 1 armed route, the controller writes exactly one SP (field manager `maintenance-manager`):
 
 ```yaml
 apiVersion: gateway.envoyproxy.io/v1alpha1
@@ -250,8 +250,8 @@ spec:
 
   It has to be one grant per namespace because `from` is capped at 16 entries.
 - **Order:** arm = grant, then SP. Disarm = remove targets, delete the SP when it has none left, then delete the grant. This order is only for clean status, not for safety: with `failOpen`, EG bypasses an invalid SP rather than returning 500.
-- **Drift:** the server-side apply on every reconcile restores our fields, and removes `bodyToExtAuth` if anyone set it.
-- **GC:** on startup and on every reconcile, delete SPs and grants that carry **our owner label value** and are no longer needed.
+- **Drift:** every reconcile compares our SP and grant with the desired ones and writes only on a difference. **As built (M4):** the write is a full `Update` (create when absent), not server-side apply: SSA never removes fields owned by another field manager, so a `bodyToExtAuth` (or `cors`) someone added with `kubectl edit` would survive it. The comparison tolerates API-server defaults inside our structures and treats any other spec key as drift. A no-op reconcile writes nothing (envtest checks the resourceVersion).
+- **GC:** on startup and on every reconcile, delete our SPs and grants that are no longer needed. Ours means: an SP with **our name and our owner label value**, and any `mm-from-<ns>` grant in the release namespace (keyed by name, so a grant whose labels or spec were edited is repaired, not re-created forever).
 - **One install per cluster.** The CRDs and ClusterRole are cluster-scoped, so a second release fails on Helm's ownership check. README and NOTES.txt say so. The owner label keeps GC from ever touching anything else.
 - **Uninstall:** a Helm pre-delete hook Job runs `maintenance-manager cleanup`. It:
   1. scales the Deployment to 0 and waits;
@@ -272,9 +272,15 @@ A route is **in conflict**, and is removed from our SP's `targetRefs` (an RDS-on
 - **It targets the route.** Count `targetRefs` (with or without `sectionName`) and `targetSelectors`, including cross-namespace `targetSelectors.namespaces`, so scan SPs **cluster-wide**.
 - **It targets the route's parent Gateway, listener or ListenerSet and has its own `extAuth`.** Merging two extAuths would replace one of them, or make the config invalid, and with failOpen an invalid config silently removes the platform's auth.
 
+`targetSelectors` count with their namespace scope: `from: Same` (the default) is the SP's own namespace, `from: All` every namespace, and `from: Selector` is evaluated against namespace labels, as Envoy Gateway does. Treating `Selector` as "every namespace" would let any tenant disarm the whole cluster with a selector that matches nothing.
+
+Ownership is "our owner label **and** our name": an SP with our labels but another name is foreign (conflict check, never adopted, never deleted by cleanup); a lost `managed-by` label on ours is drift and gets repaired. A foreign SP squatting on our name in an app namespace blocks only that namespace (reported as a conflict); write errors, too, stay per namespace, so one tenant cannot stall arming elsewhere.
+
 A foreign parent SP *without* `extAuth` (JWT, OIDC, basic auth, CORS, IP rules…) is **not** a conflict. `mergeType: StrategicMerge` keeps it working, and EG reports `Merged=True`.
 
 If a foreign SP appears on an already-armed route, that route is removed within one reconcile (~1 s). Until then, oldest-wins may briefly suppress the newcomer. Document this rather than hide it.
+
+Removing a route from `targetRefs` is RDS-only **unless it was the namespace's last armed route**: then the SP is deleted, which drains the listener (§5.4), and re-arming creates it again (another drain). A quick window toggle does the same. NOTES.txt says so; the README gets it with M7.
 
 Conflicts show in red on the editor dashboard and on the service and window pages, computed live.
 
@@ -282,7 +288,7 @@ Conflicts show in red on the editor dashboard and on the service and window page
 
 EG adds one ext_authz HTTP filter **per SecurityPolicy** to the listener. The filter is disabled by default and enabled per route. So **creating or deleting an SP** changes the listener's filter chain, and Envoy drains it: existing connections on that listener close gracefully over 60 s. For plain HTTP that is the whole port; for HTTPS it is that SNI chain.
 
-Changing an SP's `targetRefs` is RDS-only and causes no drain. One SP per namespace keeps drains to two per namespace per maintenance event: the first arm and the last disarm. With the 15-min lead time, the arm-drain happens well before maintenance starts.
+Changing an SP's `targetRefs` is RDS-only and causes no drain. Measured (D5): a create drains for 60 s and connections end with a clean FIN. One SP per namespace keeps drains to two per namespace per maintenance event: the first arm and the last disarm. With the 15-min lead time, the arm-drain happens well before maintenance starts.
 
 ## 6. The authz hot path (`Check()`)
 
@@ -474,13 +480,14 @@ resources:
 **RBAC:**
 - **Cluster-wide:**
   - `get/list/watch` on httproutes and gateways, plus listenersets in both `gateway.networking.k8s.io` and `gateway.networking.x-k8s.io` (xlistenersets)
-  - `get/list/watch/create/update/patch/delete` on securitypolicies
+  - `get/list/watch/create` on securitypolicies, and `update/patch/delete` only on our name (`resourceNames: [mm-<hash8(release-ns)>]`, rendered with `sha256sum | trunc 8`): a compromised pod cannot rewrite or delete a platform's JWT/OIDC/extAuth policy
+  - `get/list/watch` on namespaces (`targetSelectors.namespaces.from: Selector` is evaluated against namespace labels, §5.3)
   - `create/patch` on events
 - **Release namespace:**
   - all verbs on our 3 CRDs
   - `get/list/watch/create/update/patch/delete` on referencegrants
-  - `get/list/watch/create/update/patch` on leases
-  - `get/patch` on deployments and deployments/scale (cleanup)
+  - `create` on leases, and `get/list/watch/update/patch` on the `maintenance-manager` Lease
+- **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
 
 On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabled.
 
@@ -502,7 +509,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 | pod slow or hung | 100 ms timeout → fail-open for that request; passive health check ejects the pod after 3 errors |
 | invalid SP (e.g. missing ReferenceGrant) | EG bypasses ext auth for that route (failOpen); no 500 |
 | K8s API down | snapshot keeps last state; authz keeps answering; editor writes fail visibly |
-| leader lost | another replica takes over (Lease); authz unaffected |
+| leader lost | another replica takes over (Lease); authz unaffected. A leader whose caches fail to sync 3 terms in a row gives the Lease up and stays out for one lease duration (15 s), so a healthy replica wins it |
 | invalid page | built-in default page served |
 | foreign SP appears on armed route | route removed from our SP within ~1 s; red in editor |
 | uninstall | pre-delete hook: scale to 0, delete SPs, delete grants |
@@ -519,7 +526,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
   - cookie keys, `.Until` / `Retry-After`
   - the controller's arm/disarm plan, written as a pure function `Plan(desired, actual) → []Action`
 - **Native Go fuzz tests** for `Accept-Language` parsing, cookie scanning and editor form decoding. Their seed corpus runs as plain unit tests.
-- **envtest** (build tag `envtest`, Kubernetes 1.36 assets via `setup-envtest`). Covers arming order, conflict-triggered target removal, GC by owner label, and `cleanup`. The tag keeps `go test ./...` and the pre-push hook asset-free.
+- **envtest** (build tag `envtest`, Kubernetes 1.36 assets via `setup-envtest`). Covers arming order, conflict-triggered target removal, drift repair (SP and grant), GC by ownership, tenant isolation (a squatter or a failing write affects only its namespace), namespace-selector scopes, and `cleanup`. The tag keeps `go test ./...` and the pre-push hook asset-free.
 - **`Check()` benchmark gate:** ≤ 2 allocs/op is a hard gate. Time must be < 50 µs/op on CI (shared runners are noisy). The 15 µs target is checked locally and reported in the PR.
 - **Workflow tests** (`test/workflows`, plain Go, run in `lint`): parse `.github/workflows/*.yml` and assert the rules in §17.2.
 - **JS client:** `node --test client/`, Node's built-in runner, no packages. Covers the pure functions: back-off, jitter bounds, status parsing, dismissal keys. Node comes from `actions/setup-node` pinned to the current LTS.
@@ -538,7 +545,7 @@ On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabl
 - Built with `KO_DOCKER_REPO=kind.local` (with `KIND_CLUSTER_NAME`) and `ko build -B` (base import paths), which loads the image straight into kind as `kind.local/maintenance-manager`. `--bare` does not work with `kind.local`: ko fails to tag the loaded image inside the node.
 - Installed from the working tree with `image.digest=""`, a tag, and `pullPolicy: IfNotPresent`. A kind-loaded image can't be pulled by registry digest.
 
-**Before M4** (no controller yet), tests apply a fixture SP and ReferenceGrant from `test/e2e/testdata/`. M4 deletes them.
+**Before M4** (no controller yet), tests applied a fixture SP and ReferenceGrant from `test/e2e/testdata/`. M4 deleted them: every test now waits until the controller's SP is Accepted for exactly the expected routes. E9 uninstalls the release, so it lives in `zz_uninstall_test.go` and runs last.
 
 **Time budget.** On GitHub-hosted `ubuntu-24.04` runners, both matrix legs run in parallel. One leg should take **≤ 8 min**:
 
@@ -1135,8 +1142,8 @@ Only stop for the human if the answer would weaken one of §17.1's walls.
 | D2 | Whether new GHCR packages start private or public | Check after M1 (`crane manifest` anonymously); adjust §21.4's wording. **Settled (M1):** public — anonymous manifest GETs for both packages returned 200 right after `v0.1.0`. §21.4 rewritten |
 | D3 | Whether the workflow-execution event rule affects Dependabot runs | Watch the first Dependabot PR's run; if blocked, document the impact and the owner's options. **Settled (M3):** not affected. Dependabot's first PRs (#7, #8, `tools/` bumps) ran the full CI as `pull_request` events, e2e included, and the `ship` gate exempted them by author |
 | D4 | (PAT only) Whether the PAT can read `security_and_analysis` | Try it in §21.3 verification; if not, rely on the script summary (already allowed) |
-| D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README |
-| D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does |
+| D5 | Envoy drain behaviour on SP create/delete (E10 numbers) | Measure in e2e; write the measured numbers into §5.4 and the README. **Measured (M4, EG v1.9.1, kind):** our SP was Accepted about 0.5 s after the window was created; an open WebSocket on the shared listener then ended with a clean FIN (EOF, no RST) **60.1 s** after the window was created, i.e. Envoy's 60 s drain. New connections are unaffected |
+| D6 | Whether `Merged=True` appears with a parent SP (E6) on both EG versions | Measure; if EG reports it differently, assert what EG actually does. **Measured (M4, EG v1.8.3 and v1.9.1, identical):** the ancestor where our SP merges into a Gateway-listener SP reports **only** `Merged=True` ("Merged with policy …") and no `Accepted` condition; other ancestors report `Accepted=True`. "Envoy Accepted" (§10) is therefore: every ancestor has `Accepted=True` or `Merged=True` for the current generation (`controller.EnvoyAccepted`) |
 | D7 | `Check()` allocation count achievable with go-control-plane protos | Benchmark; if > 2 is unavoidable in proto handling, set the gate to the measured floor and explain why. **Measured (M3):** 0 allocs/op and about 135 ns/op (block HTML with Accept-Language negotiation, laptop). Route metadata lookups, header lookups, cookie scanning, locale matching and the query split all work on the decoded request's strings without copying, and every response is a shared precomputed value. The gate stays at ≤ 2 allocs/op and < 50 µs/op (`TestCheckBudget`, run by `test` with `MM_BENCH_GATE=1`); `TestCheckAllocs` holds every hot path at ≤ 2 in plain `go test` |
 | D8 | e2e wall time per leg | Measure; if > 10 min, speed up the slowest step (cluster reuse across tests, parallel namespaces), never drop a test. **M2 (laptop, E1+E5):** about 3 min per leg — kind create 40–55 s, EG install 45 s, ko build + chart 40–55 s, tests about 65 s. Tests must wait for terminating maintenance-manager pods to disappear, not only for new ones to be ready: a terminating pod keeps answering Check() for its 10 s drain (§11), so assertions right after a rollout or scale-down see its old answers. **M3 (laptop, E1–E5 + E8, EG v1.9.1):** tools 54 s (cold build, outside the setup clock), setup 1m17s, tests about 115 s, total 3m12s; E8 alone waits about 75 s for its dated phase. **CI (M2):** about 7.3 min per leg on ubuntu-24.04 |
 | D9 | The node port and kind port mapping values | Pick fixed values in `test/e2e`, document them. **Settled (M2):** Envoy NodePort 30080 ↔ `127.0.0.1:30080` (`test/e2e/testdata/kind.yaml`, `gateway.yaml`); kind node `kindest/node:v1.35.8` by digest, the newest Kubernetes both EG 1.8 (1.32–1.35) and 1.9 (1.33–1.36) support |

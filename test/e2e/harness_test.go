@@ -59,9 +59,10 @@ const (
 )
 
 var (
-	root    string        // repository root
-	kc      client.Client // cluster client
-	cluster string
+	root     string        // repository root
+	kc       client.Client // cluster client
+	cluster  string
+	kubeFile string // kubeconfig of the kind cluster, for helm
 )
 
 func TestMain(m *testing.M) {
@@ -82,7 +83,7 @@ func run(m *testing.M) int {
 	}
 	cluster = envOr("MM_E2E_CLUSTER", "mm-e2e")
 	keep := os.Getenv("MM_E2E_KEEP") == "1"
-	kubeFile := filepath.Join(os.TempDir(), "mm-e2e-"+cluster+".kubeconfig")
+	kubeFile = filepath.Join(os.TempDir(), "mm-e2e-"+cluster+".kubeconfig")
 	defer os.Remove(kubeFile)
 
 	// Compile the tools first, outside the setup deadline: on a cold machine
@@ -347,20 +348,6 @@ func applyFile(ctx context.Context, name, namespace string) error {
 			return kc.Patch(ctx, obj, client.Apply, client.FieldOwner("mm-e2e"), client.ForceOwnership) //nolint:staticcheck // SSA of unstructured
 		}); err != nil {
 			return fmt.Errorf("%s: apply %s %s: %w", name, obj.GetKind(), obj.GetName(), err)
-		}
-	}
-	return nil
-}
-
-// deleteFile deletes what applyFile created.
-func deleteFile(ctx context.Context, name, namespace string) error {
-	objs, err := manifests(name, namespace)
-	if err != nil {
-		return err
-	}
-	for _, obj := range objs {
-		if err := client.IgnoreNotFound(kc.Delete(ctx, obj)); err != nil {
-			return fmt.Errorf("delete %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 	}
 	return nil

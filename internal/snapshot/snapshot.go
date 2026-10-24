@@ -10,6 +10,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 	"github.com/prosperity-solutions/maintenance-manager/internal/locale"
@@ -23,8 +24,48 @@ type RouteKey struct {
 
 // RouteInfo is what the snapshot needs from an HTTPRoute.
 type RouteInfo struct {
-	Key    RouteKey
-	Labels map[string]string
+	Key     RouteKey
+	Labels  map[string]string
+	Parents []gwapiv1.ParentReference // for the controller's conflict check (§5.3)
+}
+
+// Selectors compiles the route selectors of the valid services, by name.
+// Invalid services are left out, so windows naming them skip them (§4.4).
+func Selectors(services []mmv1.MaintenanceService) map[string]labels.Selector {
+	out := map[string]labels.Selector{}
+	for i := range services {
+		s := &services[i]
+		if len(ValidateService(&s.Spec)) > 0 {
+			continue
+		}
+		sel, err := metav1.LabelSelectorAsSelector(&s.Spec.RouteSelector)
+		if err != nil {
+			continue
+		}
+		out[s.Name] = sel
+	}
+	return out
+}
+
+// WindowRoutes lists the routes any phase of a window reaches, through the
+// services it names (§4.4 rule 7: arming covers every service named in any
+// phase). The snapshot and the controller share this rule.
+func WindowRoutes(spec *mmv1.MaintenanceWindowSpec, selectors map[string]labels.Selector, routes []RouteInfo) []RouteInfo {
+	var out []RouteInfo
+	seen := map[RouteKey]bool{}
+	for _, svc := range ServicesOf(spec) {
+		sel, ok := selectors[svc]
+		if !ok {
+			continue
+		}
+		for _, rt := range routes {
+			if !seen[rt.Key] && sel.Matches(labels.Set(rt.Labels)) {
+				seen[rt.Key] = true
+				out = append(out, rt)
+			}
+		}
+	}
+	return out
 }
 
 // Page is a ready-to-render page: its template, locale matcher and texts.
@@ -120,18 +161,7 @@ func Build(in Input) *Snapshot {
 			pages[p.Name] = pg
 		}
 	}
-	selectors := map[string]labels.Selector{}
-	for i := range in.Services {
-		s := &in.Services[i]
-		if len(ValidateService(&s.Spec)) > 0 {
-			continue
-		}
-		sel, err := metav1.LabelSelectorAsSelector(&s.Spec.RouteSelector)
-		if err != nil {
-			continue
-		}
-		selectors[s.Name] = sel
-	}
+	selectors := Selectors(in.Services)
 
 	cands := map[RouteKey][]*candidate{}
 	for i := range in.Windows {

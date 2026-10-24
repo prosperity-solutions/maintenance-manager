@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,59 +17,38 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
+	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
 )
 
-// attachFixture applies the fixture SecurityPolicy and ReferenceGrant (until
-// the M4 controller does it), waits until Envoy Gateway accepts the policy,
-// and removes both when the test ends.
-func attachFixture(t *testing.T, ns string) {
+// waitArmed waits until the controller's SecurityPolicy in ns is Accepted by
+// Envoy Gateway and targets the given routes (default: web).
+func waitArmed(t *testing.T, ns string, routes ...string) {
 	t.Helper()
-	ctx := t.Context()
-	if err := applyFile(ctx, "fixture-securitypolicy.yaml", ns); err != nil {
-		t.Fatal(err)
+	if len(routes) == 0 {
+		routes = []string{"web"}
 	}
-	t.Cleanup(func() {
-		// t.Context() is already cancelled when cleanups run.
-		if err := deleteFile(context.Background(), "fixture-securitypolicy.yaml", ns); err != nil {
-			t.Errorf("remove fixture: %v", err)
-		}
-	})
-	waitFor(t, 2*time.Minute, "fixture SecurityPolicy Accepted", func() (bool, string) {
+	want := strings.Join(routes, ",")
+	waitFor(t, 3*time.Minute, "our SecurityPolicy in "+ns+" is Accepted for "+want, func() (bool, string) {
 		sp := &unstructured.Unstructured{}
 		sp.SetGroupVersionKind(gvk("gateway.envoyproxy.io", "v1alpha1", "SecurityPolicy"))
-		if err := kc.Get(ctx, types.NamespacedName{Namespace: ns, Name: "mm-fixture"}, sp); err != nil {
+		if err := kc.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: controller.SPName(mmNamespace)}, sp); err != nil {
 			return false, err.Error()
+		}
+		refs, _, _ := unstructured.NestedSlice(sp.Object, "spec", "targetRefs")
+		var got []string
+		for _, r := range refs {
+			got = append(got, r.(map[string]any)["name"].(string))
+		}
+		if strings.Join(got, ",") != want {
+			return false, "targets " + strings.Join(got, ",")
 		}
 		return accepted(sp)
 	})
 }
 
-// accepted reports whether every ancestor reports Accepted=True for the
-// current generation.
-func accepted(obj *unstructured.Unstructured) (bool, string) {
-	ancestors, _, _ := unstructured.NestedSlice(obj.Object, "status", "ancestors")
-	if len(ancestors) == 0 {
-		return false, "no ancestors in status yet"
-	}
-	for _, a := range ancestors {
-		conds, _, _ := unstructured.NestedSlice(a.(map[string]any), "conditions")
-		ok := false
-		for _, c := range conds {
-			m := c.(map[string]any)
-			if m["type"] == "Accepted" {
-				gen, _ := m["observedGeneration"].(int64)
-				if m["status"] != "True" || gen != obj.GetGeneration() {
-					return false, fmt.Sprintf("Accepted=%v reason=%v message=%v", m["status"], m["reason"], m["message"])
-				}
-				ok = true
-			}
-		}
-		if !ok {
-			return false, "no Accepted condition yet"
-		}
-	}
-	return true, ""
-}
+// accepted is the dashboard's rule: Accepted=True or Merged=True on every
+// ancestor (controller.EnvoyAccepted, D6).
+func accepted(obj *unstructured.Unstructured) (bool, string) { return controller.EnvoyAccepted(obj) }
 
 // create makes a maintenance-manager resource in the release namespace and
 // deletes it when the test ends.
@@ -132,7 +110,7 @@ func maintenance(t *testing.T, ns string, endsAt *metav1.Time, phases ...mmv1.Ph
 		ObjectMeta: metav1.ObjectMeta{Name: ns},
 		Spec:       mmv1.MaintenanceWindowSpec{Enabled: true, EndsAt: endsAt, Phases: phases},
 	})
-	attachFixture(t, ns)
+	waitArmed(t, ns)
 }
 
 const browser = "text/html,application/xhtml+xml,*/*;q=0.8"
@@ -330,3 +308,5 @@ func TestE8Transition(t *testing.T) {
 func fromEcho(r response, ns string) bool {
 	return r.status == 200 && strings.Contains(r.body, `"hostname":"`+ns+`.example.test"`)
 }
+
+func objMeta(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name} }
