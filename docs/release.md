@@ -25,7 +25,7 @@ below 1.0. Chart version = app version.
 |---|---|
 | `publish` | Fails if `vX.Y.Z` is already a published release. Bundles dependency licences into the image (`/var/run/ko/licenses/`). Builds the image with ko for linux/amd64 and linux/arm64, with ko's SPDX SBOM attached, and pushes `ghcr.io/prosperity-solutions/maintenance-manager:vX.Y.Z`. Pins that digest into the chart's `values.yaml`, packages the chart and pushes it to `oci://ghcr.io/prosperity-solutions/charts`. |
 | `attest` | Signs SLSA build provenance for the image and the chart digests into GitHub's attestation store. No checkout, no shell. |
-| `release` | Pulls the chart back by digest, writes `SHA256SUMS` (chart `.tgz` and, once it exists, `client/maintenance-manager.js`) and `THIRD_PARTY_LICENSES.csv`, creates a **draft** release, uploads and checks every asset, then publishes it. Publishing creates the tag and locks the release (immutable releases). |
+| `release` | Pulls the chart back by digest, writes `SHA256SUMS` (chart `.tgz` and the JS client `client/maintenance-manager.js`) and `THIRD_PARTY_LICENSES.csv`, creates a **draft** release, uploads and checks every asset, then publishes it. Publishing creates the tag and locks the release (immutable releases). |
 | `verify` | `gh attestation verify` for both digests, pinned to `ci.yml` on `refs/heads/main`; the image has both platforms; the pulled chart renders. |
 
 Digests and the version move between jobs only as job outputs. No artifacts, no

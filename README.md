@@ -50,6 +50,48 @@ kubectl -n <namespace> patch mmw <window> --type=merge -p '{"spec":{"enabled":fa
 > one per second per client address, so a guessing pod does not lock out your
 > port-forward.
 
+## Telling users in the app
+
+Most apps want a banner before maintenance starts, not just a page during it.
+Add the client, a single dependency-free file (under 4 KB gzipped), to your
+pages:
+
+```html
+<script src="/static/maintenance-manager.js"
+  data-dismiss="click" data-delay="8" data-poll="60" data-locale="de-CH" defer></script>
+```
+
+- **Self-host it** (recommended, works with a strict CSP `script-src 'self'`):
+  every release attaches `maintenance-manager.js`, with its checksum in
+  `SHA256SUMS`.
+- Or load it from jsDelivr, pinned to a release:
+  `https://cdn.jsdelivr.net/gh/prosperity-solutions/maintenance-manager@vX.Y.Z/client/maintenance-manager.min.js`.
+
+| attribute | values | default |
+|---|---|---|
+| `data-dismiss` | `auto` (after `data-delay` seconds) or `click` | `click` |
+| `data-delay` | seconds | `8` |
+| `data-poll` | seconds | `60` |
+| `data-locale` | BCP 47 tag | the browser's language |
+
+While the tab is visible, it asks `/__maintenance-manager/status` on your own
+host. That path only answers while a window is armed; otherwise your app
+answers it (usually a 404), the client shows nothing and polls less often (up
+to every 5 minutes). Banner and interstitial phases show a banner at the top;
+a block phase covers the page, and when it ends every open tab reloads within
+30 seconds (spread out, so they do not all hit the app at once). It renders in
+a Shadow DOM; restyle it with `--mm-bg`, `--mm-fg`, `--mm-accent`, `--mm-font`
+and `--mm-z` on `#maintenance-manager`. Your app may answer the status path
+itself with a cheap `204` to save the 404.
+
+The status path sits at the root of your host, so it reports on the route that
+serves `/`. If your host is split into path-scoped routes (say `/app` and
+`/api` as separate HTTPRoutes), make sure the route serving `/` belongs to the
+same MaintenanceService, or the banner never shows for the others. A dismissed
+banner comes back when the window's end time changes. It works under a strict
+CSP (`script-src 'self'`, Trusted Types): its styles are a constructed
+stylesheet, not inline CSS.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
