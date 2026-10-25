@@ -1,0 +1,15 @@
+{
+  "expect": "block",
+  "reason": "real ID",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "files": {
+    "notes/pr.md": "seen on @UUID@\n"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr edit 3 --body \"$(cat notes/pr.md)\""
+    }
+  }
+}

@@ -34,9 +34,9 @@ Rules for the whole run:
 
 A self-contained Helm chart that puts web apps behind **maintenance pages, interstitials and banners** on any Kubernetes cluster running **Envoy Gateway ≥ 1.8**, **without touching the apps or their HTTPRoutes**.
 
-Target clusters today are Qovery staging (EG **v1.9.1**) and the new infrastructure (EG **v1.8.3**). Use only API fields that exist in 1.8.
+Target clusters today run EG **v1.9.1** and EG **v1.8.3**. Use only API fields that exist in 1.8.
 
-- **Non-invasive.** It never edits HTTPRoutes, so it works on platforms that own and regenerate them (e.g. Qovery).
+- **Non-invasive.** It never edits HTTPRoutes, so it works on platforms that own and regenerate them.
 - **No Envoy overhead at rest.** If no maintenance window is armed, Envoy never calls us.
 - **Fail-open.** If maintenance-manager is down, slow or misconfigured, traffic flows to the apps as if it didn't exist.
 - **Coexists with platform auth.** Our policy merges into Gateway-level SecurityPolicies instead of replacing them.
@@ -119,11 +119,11 @@ All three are **namespaced**, live in the chart's release namespace, and are ser
 ```yaml
 apiVersion: maintenance-manager.oss.life.li/v1alpha1
 kind: MaintenanceService
-metadata: { name: ps-suite-staging }   # name = display name; no rename
+metadata: { name: shop-staging }   # name = display name; no rename
 spec:
   routeSelector:                       # metav1.LabelSelector, REQUIRED, non-empty
     matchLabels:
-      qovery.com/environment-id: 00000000-0000-0000-0000-000000000000   # example
+      platform.example/environment-id: 00000000-0000-0000-0000-000000000000   # example
 ```
 
 ### 4.2 `MaintenancePage` — "what users see"
@@ -165,15 +165,15 @@ spec:
       startsAt: "2026-10-30T16:00:00Z"
       action: banner                   # banner | interstitial | block
       routings:
-        - services: [ps-suite-staging, reports-staging]
+        - services: [shop-staging, blog-staging]
           page: tonight-banner
-        - services: [broker-staging]
-          page: tonight-banner-broker
+        - services: [api-staging]
+          page: tonight-banner-api
     - name: down
       startsAt: "2026-10-30T20:00:00Z"
       action: block
       routings:
-        - services: [ps-suite-staging, reports-staging, broker-staging]
+        - services: [shop-staging, blog-staging, api-staging]
           page: classic-503
 ```
 
@@ -570,7 +570,7 @@ resources:
   - `create` on leases, and `get/list/watch/update/patch` on the `maintenance-manager` Lease
 - **The uninstall hook has its own ServiceAccount** (pre-delete hook resources, weight −5, removed after success): `get/patch` on our Deployment, `list` pods, `get` our Lease, `list/delete` referencegrants, `list` securitypolicies and envoyextensionpolicies cluster-wide and `delete` ours. The long-running pods hold none of this.
 
-On Qovery, deploy it as a Helm service with "Allow cluster-wide resources" enabled.
+On a platform that runs Helm charts as services, allow cluster-wide resources for it.
 
 **Wiring:**
 - **controller-runtime:** `Metrics.BindAddress=":8081"` (the default `:8080` collides with the editor). `HealthProbeBindAddress="0"`; `/healthz` and `/readyz` are served through the metrics `ExtraHandlers`. The authz, editor and snapshot builder are Runnables with `NeedLeaderElection() == false`.
@@ -666,14 +666,14 @@ Set `timeout-minutes: 15` on `e2e`. If a leg regularly runs over 10 min, fix the
 | E9 | `helm uninstall` → zero SPs, EEPs and ReferenceGrants left | M4, EEP |
 | E10 | when our SP is created, an open WebSocket ends with a TCP FIN/EOF, not an RST, within the drain window. Close code 1006 is acceptable: Envoy closes drained upgrades without a close frame. Drain timing goes to the test log | M4 |
 | E11 | editor smoke over HTTP: create a Service, Page and Window via the forms; CSRF rejects a cross-site POST | M5 |
-| E12 | a route whose SP slot a platform policy holds (an allow-all IP `authorization`, as Qovery attaches) is armed through our EEP: banner header, status endpoint, interstitial page and cookie, 503 page and problem+json with `Retry-After`, bypass stripped; the platform policy stays Accepted; disabling removes our EEP | EEP |
+| E12 | a route whose SP slot a platform policy holds (an allow-all IP `authorization`, as some platforms attach to every route) is armed through our EEP: banner header, status endpoint, interstitial page and cookie, 503 page and problem+json with `Retry-After`, bypass stripped; the platform policy stays Accepted; disabling removes our EEP | EEP |
 
 ### 13.3 Staging only (human; part of the handback script, §23)
-These depend on Qovery and can't run on kind:
+These depend on the staging platform and can't run on kind:
 1. `kubectl get securitypolicy -A` and `kubectl get envoyextensionpolicy -A`: what does the platform attach? Routes with a platform SP are armed through our EEP; a platform EEP on a Gateway or route makes them conflicts.
 2. `kubectl get crd referencegrants.gateway.networking.k8s.io -o jsonpath='{.spec.versions[*].name}'`: is `v1beta1` served?
 3. Does a platform-level 503 `responseOverride` replace our 503 page?
-4. Qovery redeploys don't delete our SPs or ReferenceGrants.
+4. Platform redeploys don't delete our policies or ReferenceGrants.
 5. Time from SP create → Accepted → effective. If it is reliably under 60 s, lower `armingLeadTime` from 15 min to 5 min.
 
 ### 13.4 When reality disagrees with this spec
@@ -700,7 +700,7 @@ chart/                         Helm chart (templates/crds generated)
 test/e2e/  test/workflows/
 tools/go.mod  tools/depage/    pinned tools module + the dependency-age checker
 scripts/ci/ship-gate.sh        CI stamp check (+ --selftest)
-scripts/dev/                   prmeta.sh, agent-guard.sh, harden-public-repo.sh
+scripts/dev/                   prmeta.sh, agent-guard.sh, public-ids.sh, harden-public-repo.sh
 docs/                          HANDOVER.md (this spec), agentic-review.md, security.md, release.md, testing.md
 AGENTS.md CLAUDE.md README.md SECURITY.md LICENSE NOTICE lefthook.yml .golangci.yml .ko.yaml .gitignore
 ```
@@ -745,9 +745,9 @@ gate ─┬─ commits* ─┐
 | job (`name:`) | does |
 |---|---|
 | `gate` | the draft guard, in one place: `if: github.event_name != 'pull_request' \|\| github.event.pull_request.draft == false`. Every other job `needs: gate`. **A draft runs nothing, and a skipped job looks green**, so read the ready run's jobs, never the rollup. |
-| `commits` (**Conventional Commits**) | PR title only. With squash merges, only the title reaches `main`. |
+| `commits` (**Conventional Commits**) | The PR title is a Conventional Commit (with squash merges, only the title reaches `main`), and the title and body hold no real IDs (the `public-ids.sh` pattern). It runs on `opened`, `synchronize`, `reopened` and `ready_for_review`, not on a later body edit; the agent guard covers edits. |
 | `ship` (**Ship Workflow**) | Permissions `contents: read`, `pull-requests: read` (to read labels), `GH_TOKEN: ${{ github.token }}`. Checks out `ref: ${{ github.event.pull_request.head.sha }}` with `fetch-depth: 0`; the default depth-1 merge commit has neither the trailer nor the base helper. Runs `scripts/ci/ship-gate.sh`: the head commit carries a valid `Ship-Stamp:` trailer, verified with the helper from the **base** commit (§20.5). Exempt: PRs whose **author** (from the event's `pull_request.user.login`, not `github.actor`) is `dependabot[bot]`, and PRs labelled `no-ship`. The label is read live with `gh pr view --json labels` under `${{ github.token }}`, because a re-run reuses the old event payload. To waive: label, then re-run the job. |
-| `lint` | `gofmt -l`, `go vet`, golangci-lint, `go mod verify` and `go -C tools mod verify`, `govulncheck ./...`, `go generate` drift (`git diff --exit-code`), `go test ./test/workflows`, `scripts/ci/ship-gate.sh --selftest`, actionlint, zizmor (`advanced-security: false`, pinned `version`; online audits with `${{ github.token }}` on PRs, offline on `main`), `go -C tools run ./depage` plus `go -C tools test ./...` (`tools/` is its own module, so the root `./...` doesn't include it), licence check (§19). Once the chart exists it also runs `helm lint`, `helm template` and kubeconform, and rehearses the publish steps (§16.3). |
+| `lint` | `gofmt -l`, `go vet`, golangci-lint, `go mod verify` and `go -C tools mod verify`, `govulncheck ./...`, `go generate` drift (`git diff --exit-code`), `go test ./test/workflows`, `scripts/ci/ship-gate.sh --selftest`, `scripts/dev/public-ids.sh` over the tracked files, actionlint, zizmor (`advanced-security: false`, pinned `version`; online audits with `${{ github.token }}` on PRs, offline on `main`), `go -C tools run ./depage` plus `go -C tools test ./...` (`tools/` is its own module, so the root `./...` doesn't include it), licence check (§19). Once the chart exists it also runs `helm lint`, `helm template` and kubeconform, and rehearses the publish steps (§16.3). |
 | `test` | `go test -race ./...`, the benchmark gate, `go test -tags envtest ./internal/controller/...`, `node --test 'client/*.test.mjs'` |
 | `e2e` | matrix `eg: [v1.8.3, v1.9.1]` (§13.2) |
 | `site`, `pages` | The website (§15.1). |
@@ -960,13 +960,14 @@ Ported from `prosperity-solutions/outfit` (MIT). Port the mindset and the mechan
   ```
   gofmt -l . && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs'
   ```
+  plus the public-ID check in `lefthook.yml` (tracked files, and the branch's commit messages and added lines).
 - **Conventions:**
   - §14's dependency rules; the §6 hot-path budgets are CI gates.
   - `Plan()` is pure.
   - Never disable a test to get green; §13.4 applies instead.
   - Tests are hermetic: `TZ=UTC`, an injected clock, no network outside e2e.
 - **Untrusted input:** rules A8 and A9 (§17.1), verbatim.
-- **Public text hygiene:** PR, issue and comment text never contains local paths, usernames, hostnames, or raw tool output. Summarize "Driven by hand" results, e.g. `e2e: 11/11 passed on EG v1.8.3 and v1.9.1, 7m12s`.
+- **Public text hygiene:** PR, issue and comment text never contains local paths, usernames, hostnames, or raw tool output. Summarize "Driven by hand" results, e.g. `e2e: 11/11 passed on EG v1.8.3 and v1.9.1, 7m12s`. Nothing from a real deployment (platform, cluster, app, route or team names, label keys, IDs, hosts) goes public in any file, commit, PR, issue or release; `scripts/dev/public-ids.sh` catches real IDs, and there is deliberately no word list, because it would publish the words.
 - **Voice:** bold, short, concrete, a little cheeky, never overclaiming. Cheek goes in headlines, never in errors; errors say what happened and the exact fix.
 - **Docs checklist:** a change to a CR field, chart value, endpoint, header or client attribute updates the README, `docs/HANDOVER.md`, and `values.schema.json` / the CRD markers together.
 
@@ -996,7 +997,8 @@ Short. A change means: invoke the `ship` skill before the first edit. It names t
       - `git push` (including `git -C <dir> push` and `git -c … push`) with `--force`/`-f`, a `+refspec`, or targeting `main`. A plain or `--force-with-lease` push of a PR branch via `-C` is allowed, since `builder` worktrees push that way;
     - Guard self-tests live in fixture files (`scripts/dev/testdata/guard/*.json`), never in inline commands, because the guard would block command text containing `--no-verify` or `gh api -X PUT`.
       - `--no-verify`;
-      - checkout of PRs not authored by the logged-in user (`gh api user --jq .login`).
+      - checkout of PRs not authored by the logged-in user (`gh api user --jq .login`);
+      - a real ID (a UUID other than the all-zero one) in a command that runs `git commit|tag|notes|merge`, `gh pr create|edit|comment|review|merge|close`, `gh issue create|edit|comment|review|merge|close`, `gh release create|edit` or `gh api`: the whole command text (inline and heredoc messages included), the files passed as `--body-file`, `-F`, `--file`, `--notes-file`, `--input` or `gh api -F k=@file` (relative to `git -C`'s directory), and files the command reads with `cat` (`scripts/dev/public-ids.sh`). These are *refused* with "fix and run it again", not blocked for the owner; a body file the guard cannot resolve is refused too. `gh gist` is blocked outright.
     - The guard is a seatbelt. Only an optional fine-grained PAT (§18, W3) makes this a wall; with the owner's normal login, the guard plus deny rules plus classifier are what hold.
     - With the owner's admin login, also block any `gh api` call to a path under `/rulesets`, `/actions/permissions`, `/actions/policies`, `/environments`, `/collaborators`, `/teams`, `/hooks`, `/keys` or `/immutable-releases`, whatever the method, except `GET` without `-f`/`-F`/`--input`. Also block `gh repo edit|delete|archive|rename` and `gh secret|variable` anything.
   - **`hooks.SessionStart`** (matcher `startup|resume|compact|fork`): prints `"$CLAUDE_PROJECT_DIR/notes/progress.md"` and the next milestone, so the run survives compaction. Keep `progress.md` under 10,000 characters; longer output gets truncated to a preview.
@@ -1193,16 +1195,13 @@ Finalize the pinned **🌅 Run report** issue (and `notes/run-report.md`). Retit
      -n maintenance-manager --create-namespace --set editor.password=…
    kubectl -n maintenance-manager port-forward svc/maintenance-manager 8080:8080
    ```
-3. **Install on Qovery:**
-   - Org Settings → Helm Repositories: add `oci://ghcr.io/prosperity-solutions/charts` (OCI, public).
-   - Add Service → Helm: chart `maintenance-manager`, version `X.Y.Z`, **Allow cluster-wide resources** on, `editor.password` from a Qovery secret.
-   - Deploy.
+3. **Install on a platform:** add `oci://ghcr.io/prosperity-solutions/charts` as an OCI Helm repository, deploy chart `maintenance-manager` version `X.Y.Z` as a Helm service with cluster-wide resources allowed, and take `editor.password` from a secret.
 4. **Staging test script (≈ 10 min):**
-   0. **Pick one install path for the test, and keep it.** Either the plain Helm install from step 2, as release `mm` in namespace `maintenance-manager`, or the Qovery service from step 3, using its release name and namespace in the commands below. The CRDs are kept on uninstall and carry the release name. Before switching release names, run `kubectl delete crd -l app.kubernetes.io/part-of=maintenance-manager`. That deletes all windows, pages and services.
+   0. **Pick one install path for the test, and keep it.** Either the plain Helm install from step 2, as release `mm` in namespace `maintenance-manager`, or the platform's Helm service from step 3, using its release name and namespace in the commands below. The CRDs are kept on uninstall and carry the release name. Before switching release names, run `kubectl delete crd -l app.kubernetes.io/part-of=maintenance-manager`. That deletes all windows, pages and services.
    1. **Preflight:** run §13.3 checks 1–2 first. If `v1beta1` ReferenceGrant isn't served, our SP is invalid, fail-open kicks in, and every test "passes" silently. Stop and report it.
    2. Heads-up: the first arm drains the shared listener for up to 60 s, which affects all apps on plain HTTP. Pick a quiet moment.
    3. In the editor (`localhost:8080`):
-      - create a Service selecting one app's `qovery.com/environment-id`;
+      - create a Service selecting one app's routes by a label they already carry;
       - create a Page;
       - create a Window with phases `banner` (undated) → `block` (pending), and enable it;
       - wait until the dashboard shows **Envoy Accepted** (≤ 60 s).
@@ -1214,7 +1213,7 @@ Finalize the pinned **🌅 Run report** issue (and `notes/run-report.md`). Retit
       - `curl -s https://<host>/api/x` returns problem+json.
    6. Disable the window: the app is back.
    7. Run §13.3 checks 3–5.
-   8. Uninstall: `helm uninstall <release> -n <namespace>`, or delete the Qovery service. Then `kubectl get securitypolicy,referencegrant -A -l app.kubernetes.io/managed-by=maintenance-manager` must be empty.
+   8. Uninstall: `helm uninstall <release> -n <namespace>`, or delete the platform's Helm service. Then `kubectl get securitypolicy,referencegrant -A -l app.kubernetes.io/managed-by=maintenance-manager` must be empty.
 5. **Decisions made unattended,** each with the rejected option.
 6. **Blocked** items, plus anything found outside the task.
 7. **Owner cleanup:**

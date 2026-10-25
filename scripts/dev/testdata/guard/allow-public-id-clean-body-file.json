@@ -1,0 +1,14 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "files": {
+    "notes/pr.md": "Nothing to see.\n"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr edit 3 --body-file notes/pr.md"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh api repos/o/r/issues/1/comments -f body=@someone-thanks"
+    }
+  }
+}

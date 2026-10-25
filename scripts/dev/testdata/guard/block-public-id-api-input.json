@@ -1,0 +1,15 @@
+{
+  "expect": "block",
+  "reason": "real ID",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "files": {
+    "notes/i.json": "{\"body\":\"@UUID@\"}\n"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh api repos/o/r/issues --input notes/i.json"
+    }
+  }
+}

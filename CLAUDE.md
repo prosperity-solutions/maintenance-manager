@@ -15,6 +15,13 @@ skill before your first edit** (`/ship`, or the Skill tool with `skill:
 [docs/ship.md](docs/ship.md) in full instead. CI's `ship` check goes red for a
 pull request that did not come through it, and stays red.
 
+## Public repo
+
+Nothing from a real deployment goes public: no platform, cluster, app, route or
+team names, label keys, IDs or hosts, in files, commits, PRs, issues or
+releases. Write staging findings up generically. Details in AGENTS.md, "Public
+text hygiene".
+
 ## Reviewer checkpoints
 
 Run `code-reviewer` (Opus, read-only) at exactly three moments, handing it

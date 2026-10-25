@@ -152,8 +152,9 @@ the end. Then `code-reviewer` reads the full diff once more.
 - Push and open a **draft** PR. Body: what changed, why, root cause, test
   evidence, **Driven by hand**, **Decisions made unattended** (with rejected
   options), dependency justifications, and things found outside this task.
-  Public text hygiene per AGENTS.md: no local paths, usernames, hostnames, raw
-  tool output.
+  Public text hygiene per AGENTS.md: nothing from a real deployment (platform,
+  cluster, app or team names, label keys, IDs); no local paths, usernames,
+  hostnames, raw tool output.
 - End the body with this run's settings, read back from `.mm-ship.json`:
 
   ```md

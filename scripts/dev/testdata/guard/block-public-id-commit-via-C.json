@@ -1,0 +1,12 @@
+{
+  "expect": "block",
+  "reason": "real ID",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git -C sub commit -m \"fix: @UUID@\""
+    }
+  }
+}
