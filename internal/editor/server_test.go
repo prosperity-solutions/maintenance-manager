@@ -3,6 +3,7 @@ package editor
 import (
 	"context"
 	"errors"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 
 	mmv1 "github.com/prosperity-solutions/maintenance-manager/internal/api/v1alpha1"
 	"github.com/prosperity-solutions/maintenance-manager/internal/controller"
+	"github.com/prosperity-solutions/maintenance-manager/internal/render"
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
@@ -335,7 +337,7 @@ func TestWindowFormRoundTripThroughHTML(t *testing.T) {
 
 func TestPageFormRoundTripThroughHTML(t *testing.T) {
 	spec := mmv1.MaintenancePageSpec{FallbackLocale: "de", HTML: "\n<h1>{{.Title}}</h1>\n\n<p>{{.Message}}</p>\n",
-		Locales: map[string]mmv1.PageText{"de": {Title: "Gleich zurück", Message: "\nZeile 1\nZeile 2\n"}, "en": {Title: "<b>Back</b> & soon\nsecond line"}}}
+		Locales: map[string]mmv1.PageText{"de": {Title: "Gleich zurück", Message: "\nZeile 1\nZeile 2\n", ContinueLabel: "Zur Seite"}, "en": {Title: "<b>Back</b> & soon\nsecond line"}}}
 	s, c := newServer(t, &mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "p"}, Spec: spec})
 	h := s.Handler()
 	w := do(t, h, http.MethodGet, "/pages/p", nil)
@@ -742,7 +744,7 @@ func TestGetsNeverWrite(t *testing.T) {
 func TestFormsCoverEverySpecField(t *testing.T) {
 	handled := map[string]bool{
 		"routeSelector.matchLabels": true, "routeSelector.matchExpressions": true,
-		"fallbackLocale": true, "html": true, "locales.title": true, "locales.message": true,
+		"fallbackLocale": true, "html": true, "locales.title": true, "locales.message": true, "locales.continueLabel": true,
 		"enabled": true, "endsAt": true, "phases.name": true, "phases.startsAt": true, "phases.action": true,
 		"phases.routings.services": true, "phases.routings.page": true,
 	}
@@ -1027,5 +1029,40 @@ func TestRemovedRowsAreDropped(t *testing.T) {
 	}
 	if !equality.Semantic.DeepEqual(sv.Spec.RouteSelector.MatchLabels, map[string]string{"tier": "web"}) {
 		t.Errorf("service labels: %+v", sv.Spec.RouteSelector.MatchLabels)
+	}
+}
+
+// TestPreviewShowsTheEditorsZone: a preview runs no scripts, so its time is
+// rendered in the editor's zone; the button text is the locale's.
+func TestPreviewShowsTheEditorsZone(t *testing.T) {
+	s, _ := newServer(t, &mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "p"}, Spec: mmv1.MaintenancePageSpec{
+		FallbackLocale: "de", Locales: map[string]mmv1.PageText{"de": {Title: "Wartung"}, "fr": {Title: "Maintenance", ContinueLabel: "Allons-y"}},
+	}})
+	s.Now = func() time.Time { return time.Date(2026, 12, 1, 9, 40, 0, 0, time.UTC) }
+	h := s.Handler()
+	inBerlin := func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: tzCookie, Value: "Europe/Berlin", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	}
+	body := do(t, h, http.MethodGet, "/pages/p/preview?locale=de&action=interstitial", nil, inBerlin).Body.String()
+	for _, want := range []string{`data-mm-local>11:40 CET</time>`, `href="">Weiter</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("de preview: missing %q in %s", want, body)
+		}
+	}
+	body = do(t, h, http.MethodGet, "/pages/p/preview?locale=fr&action=interstitial", nil).Body.String()
+	for _, want := range []string{`data-mm-local>10:40 UTC</time>`, `href="">Allons-y</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("fr preview: missing %q in %s", want, body)
+		}
+	}
+	for _, bad := range []string{strings.Repeat("x", 65), "two\nlines", "   "} {
+		if _, ps := DecodePage(url.Values{"fallbackLocale": {"en"}, "l0.tag": {"en"}, "l0.continue": {bad}}); len(ps) != 1 || ps[0].Field != "l0.continue" {
+			t.Errorf("button text %q: %v", bad, ps)
+		}
+	}
+	form := do(t, h, http.MethodGet, "/pages/-/new", nil).Body.String()
+	first, _, _ := strings.Cut(render.DefaultSource(), "\n")
+	if !strings.Contains(form, "data-fill-source>"+template.HTMLEscapeString(first)) || !strings.Contains(form, `data-fill="html" hidden`) {
+		t.Error("the page form does not offer the built-in page to copy")
 	}
 }

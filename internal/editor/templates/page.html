@@ -20,23 +20,30 @@
 {{$r.Title}}</textarea></label>{{template "fielderr" index $.D.Errors (printf "l%d.title" $k)}}
 <label class="block">Message <span class="opt">optional</span><textarea name="l{{$k}}.message" rows="2">
 {{$r.Message}}</textarea></label>{{template "fielderr" index $.D.Errors (printf "l%d.message" $k)}}
+<label class="block">Continue button <span class="opt">optional</span> <input name="l{{$k}}.continue" value="{{$r.Continue}}" placeholder="{{$r.ContinueDefault}}" size="24"></label>{{template "fielderr" index $.D.Errors (printf "l%d.continue" $k)}}
+<span class="hint">The button on the interstitial page, at most 64 characters. Empty: a built-in text for the language (<code>Weiter</code> for <code>de</code>, <code>Continuer</code> for <code>fr</code>, …), else <code>Continue</code>.</span>
 </div>{{end}}
 <button type="button" class="small" data-add hidden>+ Add locale</button>
 </div>
-<noscript><p class="hint">Clear a locale's tag, title and message to drop it.</p></noscript>
+<noscript><p class="hint">Clear a locale's tag, title, message and Continue button to drop it.</p></noscript>
 </fieldset>
 <p><label class="block">HTML template <span class="opt">optional: empty means the built-in page</span>{{template "fielderr" index .Errors "html"}}
 <textarea name="html" rows="16">
 {{.HTML}}</textarea></label>
-<span class="hint">A <strong>Go <code>html/template</code></strong> (not Handlebars), limited to a safe subset: text, <code>{{"{{"}}.Title{{"}}"}}</code> <code>.Message</code> <code>.Locale</code> <code>.Until</code> <code>.Interstitial</code>, <code>if</code>/<code>else</code>, <code>with</code>, and <code>eq ne lt le gt ge and or not len</code>.</span></p>
+<span class="hint">A <strong>Go <code>html/template</code></strong> (not Handlebars), limited to a safe subset: text, <code>{{"{{"}}.Title{{"}}"}}</code> <code>.Message</code> <code>.Locale</code> <code>.Until</code> <code>.Continue</code> <code>.Interstitial</code>, <code>if</code>/<code>else</code>, <code>with</code>, and <code>eq ne lt le gt ge and or not len</code>. <code>.Until</code> shows in each visitor's own time zone (UTC when their browser runs no scripts); <code>.Continue</code> is the button text above.</span></p>
+<details><summary>Start from the built-in page</summary>
+<p class="hint">This is the page visitors get when the field above is empty. Copy it, then change what you like. The button is the <code>{{"{{"}}if .Interstitial{{"}}"}}</code> line: style the <code>a</code> to change how it looks, and set its text per language with <strong>Continue button</strong> above.</p>
+<p><button type="button" class="small" data-fill="html" hidden>Copy into the HTML template field</button></p>
+<pre class="code" data-fill-source>{{.BuiltIn}}</pre>
+</details>
 <div class="actions"><button class="primary">Save</button>
 <label>Preview locale <input name="previewLocale" value="{{.FallbackLocale}}" size="8"></label>
 <select name="previewAction"><option value="block">block</option><option value="interstitial">interstitial</option></select>
 <button formaction="/pages/-/preview" formtarget="_blank">Preview this form</button></div>
+<p class="hint">Previews run without scripts, so their time ({{"{{"}}.Until{{"}}"}}, one hour from now) shows in the editor's time zone. Visitors see it in their own.</p>
 </form>
 {{if not .New}}
 <p>Preview saved page: {{$n := .Name}}{{range .Tags}}<a href="/pages/{{esc $n}}/preview?locale={{.}}&amp;action=block" target="_blank" rel="noopener">{{.}} block</a> · <a href="/pages/{{esc $n}}/preview?locale={{.}}&amp;action=interstitial" target="_blank" rel="noopener">{{.}} interstitial</a> · {{end}}</p>
-<p class="muted">Previews run without scripts, so the built-in page's local-time conversion does not run there.</p>
 <form method="post" action="/pages/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete page</button></p></form>
 {{end}}
 {{end}}

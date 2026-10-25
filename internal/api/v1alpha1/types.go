@@ -55,8 +55,8 @@ type MaintenancePageSpec struct {
 	// of Locales.
 	FallbackLocale string `json:"fallbackLocale"`
 
-	// HTML is a Go html/template with .Title, .Message, .Locale, .Until and
-	// .Interstitial. Empty means the built-in default page. Only a safe subset
+	// HTML is a Go html/template with .Title, .Message, .Locale, .Until,
+	// .Continue and .Interstitial. Empty means the built-in default page. Only a safe subset
 	// is allowed: text, {{.Field}}, if/else, with, and the functions eq, ne,
 	// lt, le, gt, ge, and, or, not and len; no range, template, define, block,
 	// variables or other functions. A page outside it is invalid and visitors
@@ -78,6 +78,13 @@ type PageText struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=4096
 	Message string `json:"message,omitempty"`
+	// ContinueLabel is the text of the interstitial's button. Empty means a
+	// built-in translation for the locale's language ("Weiter" for de), or
+	// "Continue".
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[^\r\n]*$`
+	ContinueLabel string `json:"continueLabel,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -55,8 +55,8 @@ spec:
                 type: string
               html:
                 description: |-
-                  HTML is a Go html/template with .Title, .Message, .Locale, .Until and
-                  .Interstitial. Empty means the built-in default page. Only a safe subset
+                  HTML is a Go html/template with .Title, .Message, .Locale, .Until,
+                  .Continue and .Interstitial. Empty means the built-in default page. Only a safe subset
                   is allowed: text, {{.Field}}, if/else, with, and the functions eq, ne,
                   lt, le, gt, ge, and, or, not and len; no range, template, define, block,
                   variables or other functions. A page outside it is invalid and visitors
@@ -67,6 +67,14 @@ spec:
                 additionalProperties:
                   description: PageText is the localized text of a page.
                   properties:
+                    continueLabel:
+                      description: |-
+                        ContinueLabel is the text of the interstitial's button. Empty means a
+                        built-in translation for the locale's language ("Weiter" for de), or
+                        "Continue".
+                      maxLength: 64
+                      pattern: ^[^\r\n]*$
+                      type: string
                     message:
                       maxLength: 4096
                       type: string

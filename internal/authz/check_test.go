@@ -34,7 +34,7 @@ func testServer(t testing.TB, now time.Time) *Server {
 	page := mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Spec: mmv1.MaintenancePageSpec{
 		FallbackLocale: "en",
 		Locales: map[string]mmv1.PageText{
-			"en": {Title: "Back soon", Message: "Upgrading."},
+			"en": {Title: "Back soon", Message: "Upgrading.", ContinueLabel: "Take me there"},
 			"de": {Title: "Gleich zurück", Message: "Wir aktualisieren."},
 		},
 	}}
@@ -144,6 +144,14 @@ func TestCheckActions(t *testing.T) {
 			}
 			if respHeader(resp, "refresh") != "8" || !strings.Contains(resp.GetDeniedResponse().GetBody(), "Gleich zurück") {
 				t.Fatalf("refresh/body: %q", resp.GetDeniedResponse().GetBody())
+			}
+			if !strings.Contains(resp.GetDeniedResponse().GetBody(), `href="">Weiter</a>`) {
+				t.Fatalf("the built-in German button text is missing: %q", resp.GetDeniedResponse().GetBody())
+			}
+		}},
+		{"interstitial: the page's own button text", tInt, req{headers: map[string]string{"accept": browser, "accept-language": "en"}}, 200, func(t *testing.T, resp *authv3.CheckResponse) {
+			if !strings.Contains(resp.GetDeniedResponse().GetBody(), `href="">Take me there</a>`) {
+				t.Fatalf("the page's button text is missing: %q", resp.GetDeniedResponse().GetBody())
 			}
 		}},
 		{"interstitial: pass once the cookie is set", tInt, req{headers: map[string]string{"accept": browser, "cookie": "a=1; " + snapshot.CookieName("uid-db") + "=" + snapshot.PhaseKey(mmv1.Phase{Name: "hello", StartsAt: mt(tInt)}) + "; b=2"}}, 0, nil},

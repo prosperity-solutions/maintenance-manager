@@ -108,5 +108,18 @@
     scope.querySelectorAll("[data-list]").forEach(setup);
   }
 
+  // "Copy into the HTML template field": the built-in page's source.
+  document.querySelectorAll("[data-fill]").forEach(function (b) {
+    var field = b.form && b.form.elements[b.getAttribute("data-fill")];
+    var source = document.querySelector("[data-fill-source]");
+    if (!field || !source) return;
+    b.hidden = false;
+    b.addEventListener("click", function () {
+      if (field.value.trim() !== "" && !confirm("Replace the HTML template field?")) return;
+      field.value = source.textContent;
+      field.focus();
+    });
+  });
+
   wire(document);
 })();

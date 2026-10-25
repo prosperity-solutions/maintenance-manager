@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 	"text/template/parse"
 	"time"
 )
@@ -22,11 +23,22 @@ const problemType = "https://maintenance-manager.oss.life.li/problems/maintenanc
 //go:embed default.html
 var defaultHTML string
 
-// Input is what a page template sees: .Title .Message .Locale .Until .Interstitial
+// DefaultSource is the built-in page's template, for people to start their
+// own from.
+func DefaultSource() string { return defaultHTML }
+
+// Input is what a page template sees: .Title .Message .Locale .Until
+// .Continue .Interstitial
 type Input struct {
 	Locale, Title, Message string
 	Until                  time.Time // zero = unknown, .Until renders empty
-	Interstitial           bool
+	// Continue is the interstitial button's text; empty means ContinueFor(Locale).
+	Continue     string
+	Interstitial bool
+	// Zone is the time zone of .Until's text before the visitor's browser
+	// converts it; nil means UTC. Visitors get UTC; the editor's preview,
+	// which runs no scripts, gets the editor's zone.
+	Zone *time.Location
 }
 
 // view is the value the template executes against. Its fields must stay
@@ -36,6 +48,7 @@ type Input struct {
 type view struct {
 	Locale, Title, Message string
 	Until                  template.HTML
+	Continue               string
 	Interstitial           bool
 }
 
@@ -83,14 +96,22 @@ func Parse(html string) (*Page, error) {
 
 // Render executes the page. .Until is the template.HTML from FormatUntil
 // (empty when Until is zero) and is not escaped; everything else is. It fails
-// if the result exceeds MaxBody.
+// if the result exceeds MaxBody. When the page shows .Until as an element,
+// the local-time script is added once at the very end (browsers still run a
+// script after </html>; anywhere earlier it could land inside the author's
+// own <script> or <textarea>), outside the MaxBody count, so a page that
+// fitted before still fits.
 func (p *Page) Render(in Input) (string, error) {
 	b := cappedBuffer{max: MaxBody}
+	if in.Continue == "" {
+		in.Continue = ContinueFor(in.Locale)
+	}
 	v := view{
 		Locale:       in.Locale,
 		Title:        in.Title,
 		Message:      in.Message,
-		Until:        FormatUntil(in.Until),
+		Until:        FormatUntil(in.Until, in.Zone),
+		Continue:     in.Continue,
 		Interstitial: in.Interstitial,
 	}
 	if err := p.t.Execute(&b, v); err != nil {
@@ -99,7 +120,7 @@ func (p *Page) Render(in Input) (string, error) {
 		}
 		return "", fmt.Errorf("execute page template: %w", err)
 	}
-	return b.String(), nil
+	return withLocalTime(b.String()), nil
 }
 
 // checkTree allows a small, safe subset of html/template, checked on the
@@ -226,13 +247,64 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	return c.Buffer.Write(p)
 }
 
-// FormatUntil renders <time datetime="RFC3339 UTC">15:04 UTC</time>. Zero gives "".
-func FormatUntil(t time.Time) template.HTML {
+// localTime turns every <time data-mm-local> into the visitor's own time zone
+// and language, with the date when it is not today. Without scripts the text
+// stays as rendered. A tag like de_CH is read as de-CH; one Intl rejects
+// falls back to the browser's language.
+const localTime = `<script>(function(){try{var l=(document.documentElement.lang||"").replace(/_/g,"-")||undefined,n=new Date();` +
+	`try{new Intl.DateTimeFormat(l)}catch(e){l=undefined}` +
+	`document.querySelectorAll("time[data-mm-local]").forEach(function(t){t.removeAttribute("data-mm-local");` +
+	`var d=new Date(t.getAttribute("datetime"));if(isNaN(d))return;` +
+	`var o={hour:"2-digit",minute:"2-digit",timeZoneName:"short"};if(d.toDateString()!==n.toDateString()){o.month="short";o.day="numeric"}` +
+	`t.textContent=new Intl.DateTimeFormat(l,o).format(d)})}catch(e){}})();</script>`
+
+// timeMark is how a rendered page shows that .Until sits in its text: inside
+// an attribute or <title> the quote is escaped, so this does not match there.
+const timeMark = `" data-mm-local>`
+
+// withLocalTime adds the local-time script once to a page that shows .Until.
+func withLocalTime(body string) string {
+	if !strings.Contains(body, timeMark) {
+		return body
+	}
+	return body + localTime
+}
+
+// FormatUntil renders .Until: <time datetime="RFC3339 UTC">15:04 UTC</time>
+// (in zone instead of UTC when zone is set). Render adds the script that shows
+// it in the visitor's own time zone. Zero gives "".
+func FormatUntil(t time.Time, zone *time.Location) template.HTML {
 	if t.IsZero() {
 		return ""
 	}
-	u := t.UTC()
-	return template.HTML(`<time datetime="` + u.Format(time.RFC3339) + `">` + u.Format("15:04") + ` UTC</time>`) //nolint:gosec // built from time formats only
+	if zone == nil {
+		zone = time.UTC
+	}
+	z := t.In(zone)
+	return template.HTML(`<time datetime="` + t.UTC().Format(time.RFC3339) + timeMark + z.Format("15:04 MST") + `</time>`) //nolint:gosec // built from time formats only
+}
+
+// continueLabels are the built-in texts of the interstitial's button, by
+// language.
+var continueLabels = map[string]string{
+	"cs": "Pokračovat", "da": "Fortsæt", "de": "Weiter", "en": "Continue", "es": "Continuar",
+	"fi": "Jatka", "fr": "Continuer", "hu": "Tovább", "it": "Continua", "ja": "続ける",
+	"nb": "Fortsett", "nl": "Doorgaan", "nn": "Hald fram", "no": "Fortsett", "pl": "Dalej", "pt": "Continuar",
+	"ro": "Continuă", "sv": "Fortsätt", "tr": "Devam", "zh": "继续",
+}
+
+// ContinueFor is the built-in button text for a locale tag: its language's,
+// or "Continue".
+func ContinueFor(tag string) string {
+	tag = strings.ToLower(strings.ReplaceAll(tag, "_", "-"))
+	if strings.HasPrefix(tag, "zh-tw") || strings.HasPrefix(tag, "zh-hk") || strings.HasPrefix(tag, "zh-hant") {
+		return "繼續"
+	}
+	lang, _, _ := strings.Cut(tag, "-")
+	if s, ok := continueLabels[strings.ToLower(lang)]; ok {
+		return s
+	}
+	return "Continue"
 }
 
 // RetryAfter formats an HTTP-date (UTC). Zero gives "".

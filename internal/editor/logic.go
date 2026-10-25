@@ -109,7 +109,7 @@ func PageProblems(spec *mmv1.MaintenancePageSpec) []snapshot.Problem {
 	for _, tag := range slices.Sorted(maps.Keys(spec.Locales)) {
 		txt := spec.Locales[tag]
 		for _, inter := range []bool{false, true} {
-			if _, err := p.Render(render.Input{Locale: tag, Title: txt.Title, Message: txt.Message, Until: until, Interstitial: inter}); err != nil {
+			if _, err := p.Render(render.Input{Locale: tag, Title: txt.Title, Message: txt.Message, Continue: txt.ContinueLabel, Until: until, Interstitial: inter}); err != nil {
 				ps = append(ps, snapshot.Problem{Field: "html", Message: fmt.Sprintf("locale %s: %v", tag, err)})
 				break
 			}

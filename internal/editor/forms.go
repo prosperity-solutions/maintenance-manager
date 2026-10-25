@@ -23,6 +23,7 @@ const (
 	maxHTML        = 65536
 	maxTitle       = 256
 	maxMessage     = 4096
+	maxContinue    = 64
 	maxPhaseName   = 63
 	maxPhases      = 16
 	maxRoutings    = 32
@@ -214,6 +215,7 @@ func EncodePage(spec *mmv1.MaintenancePageSpec) url.Values {
 		v.Set(pre+"tag", tag)
 		v.Set(pre+"title", spec.Locales[tag].Title)
 		v.Set(pre+"message", spec.Locales[tag].Message)
+		v.Set(pre+"continue", spec.Locales[tag].ContinueLabel)
 	}
 	return v
 }
@@ -221,7 +223,7 @@ func EncodePage(spec *mmv1.MaintenancePageSpec) url.Values {
 // DecodePage reads a page form. Blank locale rows are dropped.
 func DecodePage(v url.Values) (mmv1.MaintenancePageSpec, []snapshot.Problem) {
 	var p problems
-	type row struct{ tag, title, message string }
+	type row struct{ tag, title, message, cont string }
 	rows := map[int]*row{}
 	for name, vals := range v {
 		i, rest, ok := cutIndex(name, "l")
@@ -235,6 +237,8 @@ func DecodePage(v url.Values) (mmv1.MaintenancePageSpec, []snapshot.Problem) {
 			rowAt(rows, i).title = lf(firstRaw(vals))
 		case "message":
 			rowAt(rows, i).message = lf(firstRaw(vals))
+		case "continue":
+			rowAt(rows, i).cont = firstRaw(vals)
 		}
 	}
 	spec := mmv1.MaintenancePageSpec{
@@ -248,7 +252,7 @@ func DecodePage(v url.Values) (mmv1.MaintenancePageSpec, []snapshot.Problem) {
 	// Problems are numbered in the order the form shows the rows again: by
 	// tag, as EncodePage sorts them.
 	for _, r := range byKey(sortedRows(&p, rows, "l0.tag", maxLocales), rows, func(r *row) string { return r.tag }) {
-		if r.tag == "" && r.title == "" && r.message == "" {
+		if r.tag == "" && r.title == "" && r.message == "" && r.cont == "" {
 			continue
 		}
 		// A repeated tag folds into one row on the form, so its problem goes
@@ -267,7 +271,13 @@ func DecodePage(v url.Values) (mmv1.MaintenancePageSpec, []snapshot.Problem) {
 		p.text(pre+"tag", r.tag, 0)
 		p.text(pre+"title", r.title, maxTitle)
 		p.text(pre+"message", r.message, maxMessage)
-		spec.Locales[r.tag] = mmv1.PageText{Title: r.title, Message: r.message}
+		p.text(pre+"continue", r.cont, maxContinue)
+		if strings.ContainsAny(r.cont, "\r\n") {
+			p.add(pre+"continue", "must be one line")
+		} else if r.cont != "" && strings.TrimSpace(r.cont) == "" {
+			p.add(pre+"continue", "must not be only spaces: leave it empty for the built-in text")
+		}
+		spec.Locales[r.tag] = mmv1.PageText{Title: r.title, Message: r.message, ContinueLabel: r.cont}
 	}
 	if n > maxLocales {
 		p.add("l0.tag", "too many locales: at most %d", maxLocales)
