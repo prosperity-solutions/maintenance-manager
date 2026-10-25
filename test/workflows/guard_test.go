@@ -80,7 +80,7 @@ func TestAgentGuard(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), "sh", guard)
 			cmd.Dir = work
 			cmd.Stdin = bytes.NewReader(in)
-			cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "MM_GUARD_GH="+fakeGH(t, fx))
+			cmd.Env = append(hermeticEnv(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "CLAUDE_PROJECT_DIR="+project, "MM_GUARD_GH="+fakeGH(t, fx))
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			err = cmd.Run()
@@ -128,6 +128,22 @@ func fakeGH(t *testing.T, fx guardFixture) string {
 	return p
 }
 
+// hermeticEnv is this process's environment without git's GIT_* variables.
+// Every git command this package runs takes it.
+// A git hook (lefthook's pre-push runs these tests) exports GIT_DIR and
+// friends; inherited, they point every git command here at the real
+// repository instead of the test's own, and `git init` plus `git commit`
+// then rewrite the real branch and config.
+func hermeticEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
 func gitRepo(t *testing.T, branch string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -137,7 +153,7 @@ func gitRepo(t *testing.T, branch string) string {
 	} {
 		c := exec.CommandContext(t.Context(), "git", args...)
 		c.Dir = dir
-		c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		c.Env = append(hermeticEnv(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		if out, err := c.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -162,4 +178,37 @@ func repoRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return filepath.Clean(filepath.Join(wd, "../.."))
+}
+
+// TestGitRepoIgnoresHookEnv: inside a git hook run from a linked worktree, git
+// exports only GIT_DIR, the worktree's absolute gitdir. A git init under that
+// marks the shared repository bare, and a commit lands on the pushed branch.
+// The test repos must stay their own in both shapes a hook can export.
+func TestGitRepoIgnoresHookEnv(t *testing.T) {
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		c := exec.CommandContext(t.Context(), "git", args...)
+		c.Dir = dir
+		c.Env = append(hermeticEnv(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := c.CombinedOutput()
+		if err != nil && args[0] != "config" {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	real := gitRepo(t, "main")
+	wt := filepath.Join(t.TempDir(), "wt")
+	git(real, "worktree", "add", "-q", "-b", "feat/pushed", wt)
+	gitdir := git(wt, "rev-parse", "--absolute-git-dir")
+	state := func() string {
+		return git(wt, "rev-parse", "HEAD") + " " + git(wt, "branch", "--show-current") + " bare=" + git(real, "config", "--get", "core.bare")
+	}
+	before := state()
+	for _, env := range [][2]string{{"GIT_DIR", gitdir}, {"GIT_WORK_TREE", wt}} {
+		t.Setenv(env[0], env[1])
+		gitRepo(t, "feat/x")
+		if after := state(); after != before {
+			t.Fatalf("a test repo wrote into the hook's repository (%s set): %s -> %s", env[0], before, after)
+		}
+	}
 }

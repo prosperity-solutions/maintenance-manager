@@ -158,6 +158,12 @@ run_gate() { # $1 dir, $2 branch, $3 author, $4 labels
 }
 
 selftest() {
+  # Inside a git hook, GIT_DIR and friends point at the real repository; the
+  # throwaway repos below must not inherit them.
+  # shellcheck disable=SC2046 # git's own list of repository-local variables
+  unset $(git rev-parse --local-env-vars)
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+  export GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
   REAL_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
