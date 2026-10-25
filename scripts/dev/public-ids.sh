@@ -21,7 +21,7 @@ PATTERN='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]
 scan() { # scan <label>: stdin in, "<label>:<line>" out for each real ID
   sed -E 's#user-attachments/assets/[0-9A-Fa-f-]{36}##g' |
     grep -Eno "$PATTERN" | grep -Ev ':0{8}-0{4}-0{4}-0{4}-0{12}$' |
-    sed "s#:.*##; s#^#$1:#" | uniq || true
+    awk -F: -v l="$1" '{ print l ":" $1 }' | uniq || true
 }
 
 [ $# -gt 0 ] || set -- -

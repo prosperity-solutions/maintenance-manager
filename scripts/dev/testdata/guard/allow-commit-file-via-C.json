@@ -1,0 +1,14 @@
+{
+  "expect": "allow",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "files": {
+    "wt/notes/msg.txt": "fix: x\n\nShip-Stamp: v1 8dd0657d6ac71ec1\n"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git -C wt commit -F notes/msg.txt"
+    }
+  }
+}

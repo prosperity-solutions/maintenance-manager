@@ -1,5 +1,6 @@
 {
   "expect": "block",
+  "reason": "literal path",
   "bootstrap_done": true,
   "branch": "feat/x",
   "payload": {

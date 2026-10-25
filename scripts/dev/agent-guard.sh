@@ -27,6 +27,14 @@ block() {
   exit 2
 }
 
+# refuse stops a call whose text needs fixing, not escalating: the agent fixes
+# it and runs it again.
+refuse() {
+  printf 'agent-guard: refused. %s\n' "$1" >&2
+  printf 'Fix the text or the path and run it again (AGENTS.md, Public text hygiene).\n' >&2
+  exit 2
+}
+
 bootstrap_done=0
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -f "$CLAUDE_PROJECT_DIR/notes/bootstrap.done" ]; then
   bootstrap_done=1
@@ -197,50 +205,74 @@ function do_gh(i,    s, j, a, k, c, v, method, body, ep, settings) {
 reason=$(printf '%s\n' "$verdicts" | sed -n 's/^BLOCK //p' | head -n 1)
 [ -z "$reason" ] || block "$reason"
 
-# Text that goes public (a commit, a merge, a PR, an issue, a release, a gist,
-# a comment) holds no real ID (AGENTS.md, Public text hygiene). Checked: those
-# commands' own text and every file they hand over as a body or message. A body
-# file the guard cannot read (a variable, a path relative to an earlier cd) is
-# blocked rather than waved through; a body from stdin means the whole command
-# text (the heredoc) is checked.
-public=$(printf '%s\n' "$segments" | grep -E '^([^[:space:]]*/)?(gh[[:space:]]+((pr|issue)[[:space:]]+(create|edit|comment|review|merge|close)|release[[:space:]]+(create|edit)|gist[[:space:]]+create|api)|git([[:space:]]+-[cC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*[[:space:]]+(commit|tag|notes|merge))([[:space:]]|$)' || true)
+# Text that goes public (a commit, a merge, a PR, an issue, a release, a
+# comment) holds no real ID (AGENTS.md, Public text hygiene). Checked: the whole
+# command text (so inline messages, $(cat <<EOF …) and multi-line bodies are
+# seen), every file handed over as a body or message (relative to git -C's
+# directory), and every file the command reads with cat. A body file the guard
+# cannot resolve (a variable, ~, a path after an earlier cd) is refused rather
+# than waved through.
+public=$(printf '%s\n' "$segments" | grep -E '^([^[:space:]]*/)?(gh[[:space:]]+((pr|issue)[[:space:]]+(create|edit|comment|review|merge|close)|release[[:space:]]+(create|edit)|gist[[:space:]]+[a-z]+|api)|git([[:space:]]+-[cC][[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*[[:space:]]+(commit|tag|notes|merge))([[:space:]]|$)' || true)
 if [ -n "$public" ]; then
-  bodies=$(printf '%s\n' "$public" | awk '{
+  if printf '%s\n' "$public" | grep -Eq '^([^[:space:]]*/)?gh[[:space:]]+gist[[:space:]]'; then
+    block "gh gist publishes files outside this repository; the agent has no use for it."
+  fi
+  # One "<dir> <file>" line per body file (dir is git -C's, or "."), and
+  # "cat <file>" for files the command reads with cat (scanned if present).
+  bodies=$( (
+    printf '%s\n' "$public"
+    printf '%s\n' "$segments" | grep -E '^([^[:space:]]*/)?cat[[:space:]]' | sed 's/^/@cat /' || true
+  ) | awk '
+  /^@cat / { for (i = 3; i <= NF; i++) if ($i !~ /^[-<>]/) print "cat " $i; next }
+  {
     api = ($0 ~ /^([^[:space:]]*\/)?gh[[:space:]]+api([[:space:]]|$)/)
+    git = ($0 ~ /^([^[:space:]]*\/)?git[[:space:]]/)
+    dir = "."
     for (i = 1; i <= NF; i++) {
       a = $i; v = ""; has = 0
+      if (git && a == "-C" && dir == ".") { dir = $(i+1); i++; continue }
       if (a ~ /^--[a-z-]+=/) { v = a; sub(/^[^=]*=/, "", v); sub(/=.*/, "", a); has = 1 }
       if (api) {
-        if (a == "-f" || a == "-F" || a == "--field" || a == "--raw-field") {
+        if (a == "-F" || a == "--field") {
           if (!has) v = $(i+1)
-          if (v ~ /=@/) { sub(/^[^=]*=@/, "", v); print v }
-        } else if (a == "--input") print (has ? v : $(i+1))
-      } else if (a ~ /^(-F|--file|--body-file|--notes-file|--input)$/) print (has ? v : $(i+1))
+          if (v ~ /=@/) { sub(/^[^=]*=@/, "", v); print dir " " v }
+        } else if (a == "--input") print dir " " (has ? v : $(i+1))
+      } else if (a ~ /^(-F|--file|--body-file|--notes-file|--input)$/) print dir " " (has ? v : $(i+1))
     }
   }')
-  stdin_body=0
   files=""
   nl='
 '
-  while IFS= read -r f; do
+  while IFS=' ' read -r d f; do
     [ -n "$f" ] || continue
-    if [ "$f" = - ]; then stdin_body=1; continue; fi
-    case $f in *'$'* | '~'*) block "a body or message file given as '$f': name it with a literal path, so the guard can check it for real IDs (AGENTS.md, Public text hygiene)." ;; esac
-    [ "${f#/}" != "$f" ] || f=$cwd/$f
-    [ -f "$f" ] || block "the body or message file $f is not there (relative to an earlier cd?): name it with a literal path, so the guard can check it for real IDs (AGENTS.md, Public text hygiene)."
-    files="$files$f$nl"
+    [ "$f" != - ] || continue # stdin: the heredoc is in the command text
+    read_by_cat=0
+    if [ "$d" = cat ]; then
+      read_by_cat=1
+      d=.
+    fi
+    case $f in *'$'* | '~'*)
+      [ "$read_by_cat" = 1 ] && continue
+      refuse "a body or message file given as '$f': name it with a literal path, so the guard can check it for real IDs." ;;
+    esac
+    case $d in /*) base=$d ;; .) base=$cwd ;; *) base=$cwd/$d ;; esac
+    [ "${f#/}" != "$f" ] || f=$base/$f
+    if [ -f "$f" ]; then
+      files="$files$f$nl"
+    elif [ "$read_by_cat" = 0 ]; then
+      refuse "the body or message file $f is not there (relative to an earlier cd?): name it with a literal path, so the guard can check it for real IDs."
+    fi
   done <<EOF
 $bodies
 EOF
   rc=0
   hits=$( (
-    printf '%s\n' "$public"
-    [ "$stdin_body" = 0 ] || printf '%s\n' "$cmd"
+    printf '%s\n' "$cmd"
     printf '%s' "$files" | while IFS= read -r f; do cat "$f"; done
   ) | sh "$(dirname "$0")/public-ids.sh" 2>/dev/null) || rc=$?
   case $rc in
     0) ;;
-    1) block "this text would go public with $(printf '%s\n' "$hits" | grep -c .) real ID(s) (UUIDs) in it. Remove them; examples use the all-zero UUID, and no names from a real deployment (AGENTS.md, Public text hygiene)." ;;
+    1) refuse "this text would go public with $(printf '%s\n' "$hits" | grep -c .) real ID(s) (UUIDs) in it. Remove them; examples use the all-zero UUID, and no names from a real deployment." ;;
     *) block "scripts/dev/public-ids.sh failed (exit $rc), so this public text could not be checked for real IDs." ;;
   esac
 fi

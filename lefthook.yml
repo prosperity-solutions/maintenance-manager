@@ -7,9 +7,22 @@ lefthook: scripts/dev/t lefthook
 pre-push:
   jobs:
     - name: pre-pass
-      run: test -z "$(gofmt -l .)" && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs' && git ls-files -z | xargs -0 sh scripts/dev/public-ids.sh && git log -p --format=%B origin/main..HEAD | grep '^[^-]' | sh scripts/dev/public-ids.sh
+      run: test -z "$(gofmt -l .)" && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs'
       fail_text: |
-        The pre-pass is red: gofmt, go vet, golangci-lint, the tests and the
-        public-ID check must pass
+        The pre-pass is red: gofmt, go vet, golangci-lint and the tests must pass
         before a push, because CI runs nothing on a draft PR. Run the command in
         lefthook.yml, fix what it reports, and push again.
+    - name: public-ids
+      # No real IDs in the tracked files, nor in this branch's commit messages
+      # and added lines (AGENTS.md, Public text hygiene).
+      run: |
+        git ls-files -z | xargs -0 sh scripts/dev/public-ids.sh &&
+        {
+          git rev-parse -q --verify origin/main >/dev/null ||
+            echo "public-ids: no origin/main, so the branch commits are not checked" >&2
+          git log --format=%B origin/main..HEAD 2>/dev/null
+          git log -p --no-color --format= origin/main..HEAD 2>/dev/null | grep '^+'
+        } | sh scripts/dev/public-ids.sh
+      fail_text: |
+        A real ID (UUID) would go public. Remove it from the file or the commit
+        message (git commit --amend, or a rebase for older commits) and push again.

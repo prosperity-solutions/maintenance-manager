@@ -1,0 +1,12 @@
+{
+  "expect": "block",
+  "reason": "gist",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh gist create notes/x.md"
+    }
+  }
+}

@@ -20,6 +20,7 @@ import (
 // (scripts/dev/public-ids.sh).
 type guardFixture struct {
 	Expect        string          `json:"expect"` // allow | block
+	Reason        string          `json:"reason"` // block: a substring stderr must contain
 	BootstrapDone bool            `json:"bootstrap_done"`
 	Branch        string          `json:"branch"`
 	Payload       json.RawMessage `json:"payload"`
@@ -93,6 +94,9 @@ func TestAgentGuard(t *testing.T) {
 			}
 			if got != fx.Expect {
 				t.Fatalf("want %s, got %s; stderr: %s", fx.Expect, got, stderr.String())
+			}
+			if fx.Reason != "" && !strings.Contains(stderr.String(), fx.Reason) {
+				t.Fatalf("blocked for another reason: want %q in %s", fx.Reason, stderr.String())
 			}
 		})
 	}
