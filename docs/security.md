@@ -127,7 +127,8 @@ seatbelts**:
   repo edits, secrets, rulesets, `--admin` merges, approvals);
 - a fail-closed guard hook, `scripts/dev/agent-guard.sh`, that blocks pushes to
   `main`, force pushes, `--no-verify`, settings-shaped `gh api` writes, running
-  the hardening script, and checking out PRs the agent did not author;
+  the hardening script, checking out PRs the agent did not author, and real
+  IDs (UUIDs) in commits, PRs, issues and releases;
 - Claude Code's auto-mode classifier.
 
 What still holds even if all three fail: the `main` ruleset has no bypass

@@ -15,17 +15,25 @@ import (
 
 // guardFixture is one file in scripts/dev/testdata/guard. The commands live in
 // files, not in this test's source, because the guard blocks command text that
-// merely mentions what it forbids.
+// merely mentions what it forbids. "@UUID@" in a payload or file stands for a
+// real-looking ID, built here so that none sits in the repo
+// (scripts/dev/public-ids.sh).
 type guardFixture struct {
 	Expect        string          `json:"expect"` // allow | block
 	BootstrapDone bool            `json:"bootstrap_done"`
 	Branch        string          `json:"branch"`
 	Payload       json.RawMessage `json:"payload"`
-	GH            *struct {
+	// Files are written into the work tree before the guard runs, e.g. a
+	// --body-file.
+	Files map[string]string `json:"files"`
+	GH    *struct {
 		Login   string            `json:"login"`
 		Authors map[string]string `json:"authors"`
 	} `json:"gh"`
 }
+
+// fakeID looks like a real UUID but is not written down anywhere in the repo.
+var fakeID = strings.Repeat("1", 8) + "-2222-3333-4444-" + strings.Repeat("5", 12)
 
 func TestAgentGuard(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
@@ -57,9 +65,12 @@ func TestAgentGuard(t *testing.T) {
 				mustWrite(t, filepath.Join(project, "notes/bootstrap.done"), "")
 			}
 			work := gitRepo(t, fx.Branch)
+			for name, body := range fx.Files {
+				mustWrite(t, filepath.Join(work, name), strings.ReplaceAll(body, "@UUID@", fakeID))
+			}
 
 			var payload map[string]any
-			if err := json.Unmarshal(fx.Payload, &payload); err != nil {
+			if err := json.Unmarshal(bytes.ReplaceAll(fx.Payload, []byte("@UUID@"), []byte(fakeID)), &payload); err != nil {
 				t.Fatal(err)
 			}
 			payload["cwd"] = work

@@ -7,8 +7,9 @@ lefthook: scripts/dev/t lefthook
 pre-push:
   jobs:
     - name: pre-pass
-      run: test -z "$(gofmt -l .)" && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs'
+      run: test -z "$(gofmt -l .)" && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs' && git ls-files -z | xargs -0 sh scripts/dev/public-ids.sh && git log -p --format=%B origin/main..HEAD | grep '^[^-]' | sh scripts/dev/public-ids.sh
       fail_text: |
-        The pre-pass is red: gofmt, go vet, golangci-lint and the tests must pass
+        The pre-pass is red: gofmt, go vet, golangci-lint, the tests and the
+        public-ID check must pass
         before a push, because CI runs nothing on a draft PR. Run the command in
         lefthook.yml, fix what it reports, and push again.

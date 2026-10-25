@@ -1,0 +1,14 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "files": {
+    "notes/msg.txt": "fix: x\n\nseen on @UUID@\n"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git -c user.name=x commit -F notes/msg.txt"
+    }
+  }
+}

@@ -58,6 +58,24 @@ jobs:
             echo "Fix: gh pr edit --title 'fix(scope): what changed'"
             exit 1
           fi
+      - name: PR title and body hold no real IDs
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # The same pattern as scripts/dev/public-ids.sh (this job has no
+          # checkout; test/workflows keeps the two equal): a UUID other than
+          # the all-zero one names a real thing. GitHub's own image links do not
+          # count.
+          hits=$(printf '%s\n%s\n' "$TITLE" "$BODY" |
+            sed -E 's#user-attachments/assets/[0-9A-Fa-f-]{36}##g' |
+            grep -Eo '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' |
+            grep -Evc '^0{8}-0{4}-0{4}-0{4}-0{12}$' || true)
+          if [ "${hits:-0}" != 0 ]; then
+            echo "❌ The PR title or body holds $hits real-looking ID(s) (UUIDs). Remove them; examples use 00000000-0000-0000-0000-000000000000 (AGENTS.md, Public text hygiene)."
+            exit 1
+          fi
+          echo "✅ No real IDs in the PR title or body."
 
   ship:
     name: Ship Workflow
@@ -134,6 +152,8 @@ jobs:
         run: go test ./test/workflows
       - name: Ship gate selftest
         run: sh scripts/ci/ship-gate.sh --selftest
+      - name: No real IDs in tracked files
+        run: git ls-files -z | xargs -0 sh scripts/dev/public-ids.sh
       - name: shellcheck
         run: shellcheck -s sh scripts/dev/t scripts/dev/*.sh scripts/ci/*.sh
       - name: actionlint

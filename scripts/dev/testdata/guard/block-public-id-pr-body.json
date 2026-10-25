@@ -1,0 +1,11 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr create --draft --title \"feat: x\" --body \"selector service-id=@UUID@\""
+    }
+  }
+}

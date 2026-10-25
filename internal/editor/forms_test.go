@@ -52,7 +52,7 @@ func newGen(seed uint64) *gen {
 
 func (g *gen) n(lo, hi int) int { return lo + g.r.IntN(hi-lo+1) }
 
-var words = []string{"alpha", "beta", "ps-suite", "reports", "broker", "tonight", "classic-503", "größe", "日本語", "emoji-😀", "a b c", "x\ny"}
+var words = []string{"alpha", "beta", "shop", "blog", "api", "tonight", "classic-503", "größe", "日本語", "emoji-😀", "a b c", "x\ny"}
 
 func (g *gen) word() string { return words[g.r.IntN(len(words))] }
 
@@ -142,7 +142,7 @@ func (g *gen) window(loc *time.Location) mmv1.MaintenanceWindowSpec {
 func TestServiceRoundTrip(t *testing.T) {
 	specs := []mmv1.MaintenanceServiceSpec{
 		{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"a": "b"}}},
-		{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"qovery.com/environment-id": "0000", "z": "", "a": "ü"}}},
+		{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"platform.example/environment-id": "0000", "z": "", "a": "ü"}}},
 		{RouteSelector: metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "k", Operator: metav1.LabelSelectorOpExists}}}},
 	}
 	g := newGen(1)

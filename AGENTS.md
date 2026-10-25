@@ -66,6 +66,9 @@ lefthook runs it on `pre-push`; install once per clone with
 gofmt -l . && go vet ./... && scripts/dev/t golangci-lint run && go test -race ./... && node --test 'client/*.test.mjs'
 ```
 
+plus the public-ID check in `lefthook.yml` (tracked files, and this branch's
+commit messages and added lines).
+
 ## Conventions
 
 - **Go, standard library first:** `log/slog`, `html/template`, `net/http`,
@@ -100,6 +103,21 @@ gofmt -l . && go vet ./... && scripts/dev/t golangci-lint run && go test -race .
 This repository is public. PR, issue and comment text never contains local
 paths, usernames, hostnames, or raw tool output. Summarize "Driven by hand"
 results, e.g. `e2e: 11/11 passed on EG v1.8.3 and v1.9.1, 7m12s`.
+
+**Nothing from a real deployment goes public, anywhere:** not in files, test
+fixtures, comments, commit messages, PR or issue text, release notes. That means
+no names of the hosting platform, clusters, apps, routes, services, teams or
+customers, no label keys or IDs, no hosts other than this project's own. A
+staging finding is written up generically ("a platform that attaches its own
+SecurityPolicy to every route"). Examples use neutral names (`shop`,
+`platform.example/service-id`, `example.com`) and the all-zero UUID.
+
+`scripts/dev/public-ids.sh` catches real IDs (UUIDs) in tracked files (lefthook
+pre-push, CI `lint`), in PR titles and bodies (CI `commits`), and in what the
+agent hands to `git commit`, `gh pr`, `gh issue`, `gh release` and `gh api`
+(the agent guard). Names it cannot catch: a list of internal words would publish
+them, so there is none. That part is on you, and GitHub keeps every edit of an
+issue or PR, so get it right before the first save.
 
 ## Voice
 

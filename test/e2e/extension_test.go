@@ -53,7 +53,7 @@ func gone(t *testing.T, kind, ns string) {
 	})
 }
 
-// allowAllPolicy is what some platforms (Qovery) put on every route: an IP
+// allowAllPolicy is what some platforms put on every route: an IP
 // allowlist that admits everyone, which still takes the route's
 // SecurityPolicy slot.
 func allowAllPolicy(t *testing.T, ns, route string) {

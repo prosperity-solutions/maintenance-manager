@@ -41,7 +41,7 @@ and runs:
 | E9 | uninstall leaves no SecurityPolicy, EnvoyExtensionPolicy or ReferenceGrant (runs last) |
 | E10 | a WebSocket survives the listener drain for 60 s and closes cleanly |
 | E11 | the editor through Envoy: forms create, update and delete; cross-site POSTs refused |
-| E12 | a route a platform policy holds (allow-all IP rules, as Qovery attaches) works through our EnvoyExtensionPolicy: banner, status, interstitial cookie, block, bypass |
+| E12 | a route a platform policy holds (allow-all IP rules, as some platforms attach) works through our EnvoyExtensionPolicy: banner, status, interstitial cookie, block, bypass |
 | NetworkPolicy | with the chart's NetworkPolicy on (as in every e2e install), a pod in another namespace reaches no port; a proxy-labelled pod in the Envoy namespace reaches authz and the editor, not metrics |
 
 | variable | default | |

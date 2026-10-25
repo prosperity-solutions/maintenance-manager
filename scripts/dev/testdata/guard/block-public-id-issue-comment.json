@@ -1,0 +1,14 @@
+{
+  "expect": "block",
+  "bootstrap_done": true,
+  "branch": "feat/x",
+  "files": {
+    "notes/c.md": "@UUID@\n"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh issue comment 1 --body-file=notes/c.md"
+    }
+  }
+}
