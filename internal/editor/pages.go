@@ -20,8 +20,9 @@ import (
 const previewCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'"
 
 type localeRow struct {
-	Tag, Title, Message string
-	Blank               bool // added empty by the form: hidden behind "Add" when scripts run
+	Tag, Title, Message, Continue string
+	ContinueDefault               string // the built-in text an empty field gives
+	Blank                         bool   // added empty by the form: hidden behind "Add" when scripts run
 }
 
 type pageForm struct {
@@ -31,6 +32,7 @@ type pageForm struct {
 	HTML           string
 	Rows           []localeRow
 	Tags           []string // saved locales, for the preview links
+	BuiltIn        string   // the built-in page's template, to copy from
 	Errors         map[string][]string
 	All            []snapshot.Problem
 	Notice         string
@@ -140,7 +142,7 @@ func (s *Server) previewSaved(w http.ResponseWriter, r *http.Request) {
 		s.getFailed(w, r, err)
 		return
 	}
-	s.preview(w, &obj.Spec, r.URL.Query().Get("locale"), r.URL.Query().Get("action"))
+	s.preview(w, r, &obj.Spec, r.URL.Query().Get("locale"), r.URL.Query().Get("action"))
 }
 
 // previewForm renders the unsaved form, so an edit can be checked first.
@@ -154,12 +156,14 @@ func (s *Server) previewForm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the page is not valid yet: "+ps[0].Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	s.preview(w, &spec, r.PostFormValue("previewLocale"), r.PostFormValue("previewAction"))
+	s.preview(w, r, &spec, r.PostFormValue("previewLocale"), r.PostFormValue("previewAction"))
 }
 
 // preview answers with the rendered page in a sandbox. It never sends the
 // interstitial's Refresh or cookie: only the body is previewed.
-func (s *Server) preview(w http.ResponseWriter, spec *mmv1.MaintenancePageSpec, loc, action string) {
+// Previews run no scripts, so the time shows in the editor's zone (zone(r)),
+// as a visitor's browser would show it in theirs.
+func (s *Server) preview(w http.ResponseWriter, r *http.Request, spec *mmv1.MaintenancePageSpec, loc, action string) {
 	w.Header().Set("Content-Security-Policy", previewCSP)
 	p, err := render.Parse(spec.HTML)
 	if err != nil {
@@ -171,9 +175,10 @@ func (s *Server) preview(w http.ResponseWriter, spec *mmv1.MaintenancePageSpec, 
 	}
 	txt := spec.Locales[loc]
 	body, err := p.Render(render.Input{
-		Locale: loc, Title: txt.Title, Message: txt.Message,
+		Locale: loc, Title: txt.Title, Message: txt.Message, Continue: txt.ContinueLabel,
 		Until:        s.now().Add(time.Hour).Truncate(time.Minute),
 		Interstitial: action == string(mmv1.ActionInterstitial),
+		Zone:         zone(r),
 	})
 	if err != nil {
 		http.Error(w, "rendering failed: "+err.Error(), http.StatusUnprocessableEntity)
@@ -189,9 +194,11 @@ func pageFormOf(name, rv string, isNew bool, spec *mmv1.MaintenancePageSpec, ps 
 	v := EncodePage(spec)
 	for k := 0; v.Has("l" + itoa(k) + ".tag"); k++ {
 		pre := "l" + itoa(k) + "."
-		f.Rows = append(f.Rows, localeRow{Tag: v.Get(pre + "tag"), Title: v.Get(pre + "title"), Message: v.Get(pre + "message")})
+		f.Rows = append(f.Rows, localeRow{Tag: v.Get(pre + "tag"), Title: v.Get(pre + "title"), Message: v.Get(pre + "message"),
+			Continue: v.Get(pre + "continue"), ContinueDefault: render.ContinueFor(v.Get(pre + "tag"))})
 	}
-	f.Rows = append(f.Rows, localeRow{Blank: true}, localeRow{Blank: true})
+	f.Rows = append(f.Rows, localeRow{Blank: true, ContinueDefault: "built-in for the language"}, localeRow{Blank: true, ContinueDefault: "built-in for the language"})
+	f.BuiltIn = render.DefaultSource()
 	if !isNew {
 		f.Tags = slices.Sorted(maps.Keys(spec.Locales))
 	}

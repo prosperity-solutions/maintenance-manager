@@ -25,7 +25,7 @@ API it installs, and one install per cluster.
 You describe three things as custom resources, usually in the editor:
 
 - a **MaintenanceService**: which HTTPRoutes make up an app (a label selector);
-- a **MaintenancePage**: what users see (an HTML template and texts per language);
+- a **MaintenancePage**: what users see (an HTML template, and per language a title, a message and the interstitial's button text);
 - a **MaintenanceWindow**: when, and what happens, as phases: `banner` (pass
   through with a header the app can show), `interstitial` (a page once per
   session), `block` (503 with your page, or `application/problem+json` for

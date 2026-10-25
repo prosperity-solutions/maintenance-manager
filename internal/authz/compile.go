@@ -154,7 +154,7 @@ func compileDecision(d *snapshot.Decision, log *slog.Logger) *decision {
 }
 
 func renderPage(d *snapshot.Decision, loc string, text mmv1.PageText, interstitial bool, log *slog.Logger) string {
-	in := render.Input{Locale: loc, Title: text.Title, Message: text.Message, Until: d.Until, Interstitial: interstitial}
+	in := render.Input{Locale: loc, Title: text.Title, Message: text.Message, Continue: text.ContinueLabel, Until: d.Until, Interstitial: interstitial}
 	body, err := d.Page.Template.Render(in)
 	if err == nil {
 		return body

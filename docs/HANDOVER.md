@@ -137,17 +137,18 @@ spec:
   html: |            # optional; built-in default template if empty
     <!doctype html><html lang="{{.Locale}}"><title>{{.Title}}</title>
     <h1>{{.Title}}</h1><p>{{.Message}}</p>{{if .Until}}<p>{{.Until}}</p>{{end}}
-    {{if .Interstitial}}<a href="">Continue</a>{{end}}
+    {{if .Interstitial}}<a href="">{{.Continue}}</a>{{end}}
   locales:
     en: { title: "We'll be right back", message: "Scheduled maintenance." }
-    de: { title: "Gleich wieder da",    message: "Geplante Wartung." }
+    de: { title: "Gleich wieder da",    message: "Geplante Wartung.", continueLabel: "Zur Seite" }  # continueLabel optional, ≤ 64
 ```
 
-- **Template:** Go `html/template`, with the variables `.Title`, `.Message`, `.Locale`, `.Until` and `.Interstitial` (bool).
+- **Template:** Go `html/template`, with the variables `.Title`, `.Message`, `.Locale`, `.Until`, `.Continue` and `.Interstitial` (bool).
+- **`.Continue`** is the interstitial button's text: the locale's `continueLabel` (one line, at most 64 characters), else a built-in translation for its language (`Weiter` for `de`, `Continuer` for `fr`, about twenty languages; `render.ContinueFor`), else `Continue`. The editor shows the built-in page's source, ready to copy, as the example of a template with a button.
 - **`.Until`** is the end of the *current phase*: the next phase's `startsAt`, or `endsAt`. It is empty if unknown, e.g. when the next phase is pending.
   - It reads correctly in both phase types: "Maintenance starts at {{.Until}}" in a warning phase, "Back at {{.Until}}" in a block phase.
-  - It renders as `<time datetime="…Z">22:30 UTC</time>`.
-  - The built-in default template includes a ~5-line inline script that converts `<time>` elements to the visitor's local timezone.
+  - It renders as `<time datetime="…Z" data-mm-local>22:30 UTC</time>`. When a page shows it in its text, the renderer adds a small inline script once (at the very end, where browsers still run it; about 0.5 KiB, not counted against the 64 KiB limit) that shows it in the visitor's own time zone and language, with the date when it is not today. Custom pages get it too; without scripts the text stays in UTC. In an attribute `.Until` is plain text ("22:30 UTC") and adds no script; in `<title>` or `<textarea>` it shows as escaped markup, so don't use it there. Bodies are precomputed per locale, so the server cannot know the visitor's zone, and a relative "in 2 hours" would go stale.
+  - The editor's preview runs no scripts (sandbox CSP), so it renders the text in the editor's own zone instead.
 - **Validation (Go):** `fallbackLocale` must exist, the template must parse and execute, and the rendered body must be ≤ 64 KiB. An invalid page is replaced by the built-in default page.
 - **As built (after M4):** templates are limited to a safe subset, checked on the parse tree before anything runs: text, `{{.Field}}`, `if`/`else`, `with`, and the functions `eq ne lt le gt ge and or not len`. Rejected: `range` (since Go 1.24 it iterates over an integer, so `{{range 9223372036854775807}}{{end}}` runs for ever), `template`/`define`/`block` (recursion), variables, and every other function (nested `js`, `printf` widths or a doubled variable build gigabytes in memory without writing a byte). The check is static because the parse-time run uses sample data and misses branches for other locales. Every replica parses every page when it rebuilds its snapshot, so one such page froze all changes, including disabling a window. Rendering also stops writing at 64 KiB.
 
@@ -495,7 +496,7 @@ Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** 
    - Per armed route: **Envoy Accepted** (all ancestors report `Accepted=True` with `observedGeneration == generation`), and conflicts in red.
    - Buttons: enable/disable, **Start next phase now**.
 2. **Services:** label key/value rows, plus a **live list of matched routes** with hostnames and conflicts.
-3. **Pages:** fallback locale, HTML textarea, a title/message fieldset per locale, and **Preview** (rendered by the real renderer; pick locale and action).
+3. **Pages:** fallback locale, HTML textarea, per locale a tag, title, message and **Continue button** text, the built-in page's source to copy from (**Start from the built-in page**), and **Preview** (rendered by the real renderer; pick locale and action).
 4. **Windows:** enabled, endsAt, and phases. Phase order is an `order` number field. Each phase has name, startsAt, action and routings. Validation errors appear inline.
 
 **As built (M5):**

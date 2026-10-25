@@ -41,7 +41,7 @@ func TestRenderEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `&lt;b&gt;t&lt;/b&gt;|a&amp;&#34;b&#34;|<time datetime="2026-10-30T22:30:00Z">22:30 UTC</time>`
+	want := `&lt;b&gt;t&lt;/b&gt;|a&amp;&#34;b&#34;|<time datetime="2026-10-30T22:30:00Z" data-mm-local>22:30 UTC</time>` + localTime
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -63,10 +63,14 @@ func TestRenderTooLarge(t *testing.T) {
 
 func TestFormats(t *testing.T) {
 	in := fixed.In(time.FixedZone("X", 5*3600))
-	if got := string(FormatUntil(in)); got != `<time datetime="2026-10-30T22:30:00Z">22:30 UTC</time>` {
+	if got := string(FormatUntil(in, nil)); got != `<time datetime="2026-10-30T22:30:00Z" data-mm-local>22:30 UTC</time>` {
 		t.Errorf("FormatUntil: %q", got)
 	}
-	if FormatUntil(time.Time{}) != "" {
+	berlin, _ := time.LoadLocation("Europe/Berlin")
+	if got := string(FormatUntil(in, berlin)); got != `<time datetime="2026-10-30T22:30:00Z" data-mm-local>23:30 CET</time>` {
+		t.Errorf("FormatUntil in Berlin: %q", got)
+	}
+	if FormatUntil(time.Time{}, nil) != "" {
 		t.Error("zero FormatUntil")
 	}
 	if got := RetryAfter(in); got != "Fri, 30 Oct 2026 22:30:00 GMT" {
@@ -115,7 +119,7 @@ func TestDefaultPage(t *testing.T) {
 	if len(out) >= 8<<10 {
 		t.Errorf("rendered %d bytes", len(out))
 	}
-	for _, s := range []string{`lang="de"`, `<time datetime="2026-10-30T22:30:00Z">`, "<h1>Gleich wieder da</h1>"} {
+	for _, s := range []string{`lang="de"`, `<time datetime="2026-10-30T22:30:00Z" data-mm-local>`, "<h1>Gleich wieder da</h1>", "<script>"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("missing %q", s)
 		}
@@ -126,8 +130,13 @@ func TestDefaultPage(t *testing.T) {
 	in.Interstitial = true
 	in.Until = time.Time{}
 	out, _ = Default.Render(in)
-	if !strings.Contains(out, `href="">Continue</a>`) {
-		t.Error("Continue link missing")
+	if !strings.Contains(out, `href="">Weiter</a>`) {
+		t.Error("the German built-in button text is missing")
+	}
+	in.Continue = "Zur Seite"
+	out, _ = Default.Render(in)
+	if !strings.Contains(out, `href="">Zur Seite</a>`) {
+		t.Error("the page's own button text is missing")
 	}
 	if strings.Contains(out, "<time datetime") {
 		t.Error("time element with unknown until")
@@ -206,5 +215,60 @@ func TestViewHasNoMethods(t *testing.T) {
 		if f.NumMethod() != 0 || reflect.PointerTo(f).NumMethod() != 0 {
 			t.Fatalf("view.%s (%s) has methods: pages could call them", v.Field(i).Name, f)
 		}
+	}
+}
+
+func TestContinueFor(t *testing.T) {
+	for tag, want := range map[string]string{"de": "Weiter", "de-CH": "Weiter", "DE_at": "Weiter", "fr-CA": "Continuer", "en": "Continue", "xx": "Continue", "": "Continue"} {
+		if got := ContinueFor(tag); got != want {
+			t.Errorf("ContinueFor(%q) = %q, want %q", tag, got, want)
+		}
+	}
+}
+
+// TestUntilInEveryContext: .Until is an element with the script (added once)
+// in text, and plain text without a script elsewhere.
+func TestUntilInEveryContext(t *testing.T) {
+	el := `<time datetime="2026-10-30T22:30:00Z" data-mm-local>22:30 UTC</time>`
+	for _, c := range []struct{ tpl, want string }{
+		{`<p>{{.Until}}</p>`, `<p>` + el + `</p>` + localTime},
+		{`<p>{{.Until}}</p><p>{{.Until}}</p></body>`, `<p>` + el + `</p><p>` + el + `</p></body>` + localTime},
+		{`<a title="Back at {{.Until}}">x</a>`, `<a title="Back at 22:30 UTC">x</a>`},
+		{`<title>{{.Until}}</title>`, `<title>&lt;time datetime=&#34;2026-10-30T22:30:00Z&#34; data-mm-local&gt;22:30 UTC&lt;/time&gt;</title>`},
+		{`<script>var u = {{.Until}};</script>`, ""},
+	} {
+		p, err := Parse(c.tpl)
+		if err != nil {
+			t.Fatalf("%s: %v", c.tpl, err)
+		}
+		got, err := p.Render(Input{Until: fixed})
+		if err != nil {
+			t.Fatalf("%s: %v", c.tpl, err)
+		}
+		if c.want == "" {
+			if strings.Count(got, "<script>") != 1 {
+				t.Errorf("%s: the script was added inside a script: %q", c.tpl, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.tpl, got, c.want)
+		}
+	}
+}
+
+// TestUntilScriptOutsideTheLimit: a page that used .Until many times and fit
+// under MaxBody before the script existed still renders.
+func TestUntilScriptOutsideTheLimit(t *testing.T) {
+	el := len(FormatUntil(fixed, nil))
+	n := 100
+	tpl := strings.Repeat("{{.Until}}", n) + strings.Repeat("x", MaxBody-n*el)
+	p, err := Parse(tpl)
+	if err != nil {
+		t.Fatalf("a page of exactly %d bytes is refused: %v", MaxBody, err)
+	}
+	got, err := p.Render(Input{Until: fixed})
+	if err != nil || len(got) != MaxBody+len(localTime) {
+		t.Fatalf("len %d, err %v", len(got), err)
 	}
 }
