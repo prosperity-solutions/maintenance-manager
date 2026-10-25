@@ -291,7 +291,7 @@
   <p>You describe three things, usually in the built-in editor:</p>
   <ul>
     <li>a <b>MaintenanceService</b>: which HTTPRoutes make up an app (a label selector);</li>
-    <li>a <b>MaintenancePage</b>: what users see (an HTML template and texts per language);</li>
+    <li>a <b>MaintenancePage</b>: what users see (your HTML template, or the built-in one, and texts per language);</li>
     <li>a <b>MaintenanceWindow</b>: when, and what happens, as phases.</li>
   </ul>
 
@@ -324,13 +324,36 @@ helm install mm oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sh
   <p>A dashboard shows which windows are armed, which routes they cover, and
   whether Envoy accepted the policy. <b>Start next phase now</b> is one click.</p>
 
+  <h2>Make the page yours</h2>
+  <p>The built-in page is plain on purpose. Want your colours, your logo, your
+  tone? Give the page an HTML template. It is a Go <code>html/template</code>,
+  not Handlebars:</p>
+<pre><code>&lt;h1&gt;{{.Title}}&lt;/h1&gt;
+&lt;p&gt;{{.Message}}&lt;/p&gt;
+{{if .Until}}&lt;p&gt;Back at {{.Until}}&lt;/p&gt;{{end}}
+{{if .Interstitial}}&lt;a href=""&gt;{{.Continue}}&lt;/a&gt;{{end}}</code></pre>
+  <ul>
+    <li><b>Times in the visitor's own zone.</b> <code>{{.Until}}</code> shows 23:30 MEZ on a German page in Berlin, 05:30 PM EST on an English one in New York.</li>
+    <li><b>The button speaks their language.</b> <code>{{.Continue}}</code> is your text per language, or a built-in one (Weiter, Continuer, …).</li>
+    <li><b>Self-contained.</b> CSS in a <code>&lt;style&gt;</code> tag, images inline: during a block, the app's own host serves nothing else.</li>
+  </ul>
+  <p><b>Let an agent write it.</b> The <a href="https://github.com/prosperity-solutions/maintenance-manager/blob/main/docs/pages.md">page guide</a>
+  has every rule, a full branded example, and a brief to paste into your coding
+  agent. Then check it in the editor's preview.</p>
+
   <h2>Tell users in the app</h2>
   <p>A single file, no dependencies, under 4 KB gzipped. It shows a banner
   before maintenance, covers the page during a block, and reloads the tab when
   it ends:</p>
 <pre><code>&lt;script src="/static/maintenance-manager.js" data-dismiss="click" defer&gt;&lt;/script&gt;</code></pre>
   <p>Self-host it from the release assets. It works under a strict CSP and
-  Trusted Types.</p>
+  Trusted Types. Make it match your app with five CSS variables:</p>
+<pre><code>#maintenance-manager { --mm-bg: #c2410c; --mm-fg: #fff; --mm-accent: #fde68a;
+  --mm-font: system-ui, sans-serif; }</code></pre>
+  <p><b>Want it fully native?</b> Skip the script: your app reads
+  <code>/__maintenance-manager/status</code> (title, message, until, action)
+  and draws its own banner. The <a href="https://github.com/prosperity-solutions/maintenance-manager/blob/main/docs/apps.md">app guide</a>
+  has both ways, the exact formats, and a brief for your coding agent.</p>
 
   <h2>Good to know</h2>
   <h3>The 60-second drain</h3>

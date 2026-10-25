@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -270,5 +271,66 @@ func TestUntilScriptOutsideTheLimit(t *testing.T) {
 	got, err := p.Render(Input{Until: fixed})
 	if err != nil || len(got) != MaxBody+len(localTime) {
 		t.Fatalf("len %d, err %v", len(got), err)
+	}
+}
+
+// TestDocsExamplePage: the example in docs/pages.md parses, passes the safe
+// subset and renders both ways.
+func TestDocsExamplePage(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/pages.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(doc), "<!-- example:start -->\n```html\n")
+	example, _, ok2 := strings.Cut(rest, "```\n<!-- example:end -->")
+	if !ok || !ok2 {
+		t.Fatal("docs/pages.md: the example block is missing")
+	}
+	p, err := Parse(example)
+	if err != nil {
+		t.Fatalf("the documented example is not a valid page: %v", err)
+	}
+	for _, in := range []Input{
+		{Locale: "de", Title: "Gleich wieder da", Message: "Wartung", Until: fixed, Interstitial: true},
+		{Locale: "en", Title: "Back soon", Message: "Maintenance"},
+		{Locale: "en", Title: "Back soon", Message: "Maintenance", Until: fixed},
+	} {
+		out, err := p.Render(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.Interstitial != strings.Contains(out, `href="">`+ContinueFor(in.Locale)+`</a>`) {
+			t.Errorf("%s: button %v", in.Locale, in.Interstitial)
+		}
+		want := map[string]string{"de": "Wieder da um <time", "en": "Back at <time"}[in.Locale]
+		if !in.Until.IsZero() && (!strings.Contains(out, want) || !strings.HasSuffix(out, localTime)) {
+			t.Errorf("%s: no local time", in.Locale)
+		}
+	}
+}
+
+// TestDocsAppExamples: the JSON in docs/apps.md is exactly what is served.
+func TestDocsAppExamples(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/apps.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := func(name string) string {
+		_, rest, ok := strings.Cut(string(doc), "<!-- "+name+":start -->\n```json\n")
+		body, _, ok2 := strings.Cut(rest, "\n```\n<!-- "+name+":end -->")
+		if !ok || !ok2 {
+			t.Fatalf("docs/apps.md: the %s block is missing", name)
+		}
+		return body
+	}
+	until := time.Date(2026, 10, 30, 22, 30, 0, 0, time.UTC)
+	for name, want := range map[string]string{
+		"status-example":  StatusJSON("banner", "db-migration", "warn", "We'll be right back", "Scheduled maintenance tonight.", until, "en"),
+		"status-none":     StatusJSON("none", "", "", "", "", time.Time{}, ""),
+		"problem-example": ProblemJSON("We'll be right back", "Scheduled maintenance tonight.", "db-migration", until),
+	} {
+		if got := block(name); got != want {
+			t.Errorf("docs/apps.md %s:\n got %s\nwant %s", name, got, want)
+		}
 	}
 }

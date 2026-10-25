@@ -704,7 +704,7 @@ test/e2e/  test/workflows/
 tools/go.mod  tools/depage/    pinned tools module + the dependency-age checker
 scripts/ci/ship-gate.sh        CI stamp check (+ --selftest)
 scripts/dev/                   prmeta.sh, agent-guard.sh, public-ids.sh, harden-public-repo.sh
-docs/                          HANDOVER.md (this spec), agentic-review.md, security.md, release.md, testing.md
+docs/                          HANDOVER.md (this spec), agentic-review.md, security.md, release.md, testing.md, pages.md (custom pages), apps.md (app integration)
 AGENTS.md CLAUDE.md README.md SECURITY.md LICENSE NOTICE lefthook.yml .golangci.yml .ko.yaml .gitignore
 ```
 
