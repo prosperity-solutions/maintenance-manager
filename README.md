@@ -25,7 +25,7 @@ API it installs, and one install per cluster.
 You describe three things as custom resources, usually in the editor:
 
 - a **MaintenanceService**: which HTTPRoutes make up an app (a label selector);
-- a **MaintenancePage**: what users see (an HTML template, and per language a title, a message and the interstitial's button text);
+- a **MaintenancePage**: what users see (an HTML template, and per language a title, a message and the interstitial's button text; see [Your own page](#your-own-page));
 - a **MaintenanceWindow**: when, and what happens, as phases: `banner` (pass
   through with a header the app can show), `interstitial` (a page once per
   session), `block` (503 with your page, or `application/problem+json` for
@@ -129,11 +129,41 @@ kubectl -n <namespace> patch mmw <window> --type=merge -p '{"spec":{"enabled":fa
 > one per second per client address, so a guessing pod does not lock out your
 > port-forward.
 
+## Your own page
+
+The built-in page is plain and works in every language you give it texts for.
+For your own look, give the MaintenancePage an `html` template: a Go
+`html/template` (not Handlebars) with `{{.Title}}`, `{{.Message}}`,
+`{{.Locale}}`, `{{.Until}}` (shown in the visitor's own time zone),
+`{{.Continue}}` (the interstitial's button text, `continueLabel` per language)
+and `{{.Interstitial}}`.
+
+```html
+<h1>{{.Title}}</h1>
+<p>{{.Message}}</p>
+{{if .Until}}<p>Back at {{.Until}}</p>{{end}}
+{{if .Interstitial}}<a href="">{{.Continue}}</a>{{end}}
+```
+
+Keep it self-contained (CSS in `<style>`, images inline): during a block, the
+app's own host serves nothing else. **[docs/pages.md](docs/pages.md)** has every
+rule, a full branded example, and a brief you can paste into a coding agent to
+have it write the page for you.
+
 ## Telling users in the app
 
 Most apps want a banner before maintenance starts, not just a page during it.
+Two ways, both in **[docs/apps.md](docs/apps.md)** with exact formats and a
+brief to paste into a coding agent:
+
+1. **The JS client** (below): one script tag, restyled with five CSS
+   variables.
+2. **Your own banner:** read `GET /__maintenance-manager/status`
+   (`{"action":"banner","title":…,"message":…,"until":…}`) and draw it with
+   your own components.
+
 Add the client, a single dependency-free file (under 4 KB gzipped), to your
-pages:
+pages as a classic script tag (not bundled, not `type="module"`):
 
 ```html
 <script src="/static/maintenance-manager.js"
@@ -150,7 +180,7 @@ pages:
 |---|---|---|
 | `data-dismiss` | `auto` (after `data-delay` seconds) or `click` | `click` |
 | `data-delay` | seconds | `8` |
-| `data-poll` | seconds, 5–3600; keep it under 900 so a banner shows before a window's 15-minute arming lead time runs out | `60` |
+| `data-poll` | seconds, 5–3600: a banner shows within about this long after its phase starts | `60` |
 | `data-locale` | BCP 47 tag | the browser's language |
 
 While the tab is visible, it asks `/__maintenance-manager/status` on your own

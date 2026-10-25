@@ -143,6 +143,8 @@ updates, together:
 - [ ] `chart/values.schema.json` and the CRD markers (then `go generate ./...`)
 - [ ] `site/index.html`, if the website shows it (install, phases, client snippet)
 - [ ] `site/problems/maintenance/index.html`, if the problem+json body or headers change
+- [ ] `docs/pages.md`, if what a page template sees or may use changes (fields, the safe subset, limits, `.Until`); its example is a test
+- [ ] `docs/apps.md`, if what an app sees changes (the status endpoint, its JSON, the response header, problem+json, the client's attributes or CSS variables); its JSON examples are a test
 
 A purely internal change says so in the PR body.
 
