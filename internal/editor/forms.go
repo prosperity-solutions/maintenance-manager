@@ -94,6 +94,16 @@ func sortedRows[T any](p *problems, rows map[int]*T, field string, limit int) []
 	return idx
 }
 
+// byKey returns the rows at idx, stably sorted by key.
+func byKey[T any](idx []int, rows map[int]*T, key func(*T) string) []*T {
+	out := make([]*T, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, rows[i])
+	}
+	slices.SortStableFunc(out, func(a, b *T) int { return strings.Compare(key(a), key(b)) })
+	return out
+}
+
 // first returns the first submitted value of a field, trimmed.
 func first(vals []string) string {
 	if len(vals) == 0 {
@@ -156,17 +166,24 @@ func DecodeService(v url.Values, old *mmv1.MaintenanceServiceSpec) (mmv1.Mainten
 	}
 	labels := map[string]string{}
 	n := 0
-	for _, i := range sortedRows(&p, rows, "sel0.key", maxSelectors) {
-		r := rows[i]
+	// Problems are numbered in the order the form shows the rows again: by
+	// key, as EncodeService sorts them.
+	for _, r := range byKey(sortedRows(&p, rows, "sel0.key", maxSelectors), rows, func(r *row) string { return r.key }) {
 		if r.key == "" && r.value == "" {
 			continue
+		}
+		// A repeated key folds into one row on the form, so its problem goes
+		// to that row, not to a blank one after it.
+		_, dup := labels[r.key]
+		if dup {
+			n--
 		}
 		f := "sel" + strconv.Itoa(n) + ".key"
 		n++
 		if r.key == "" {
 			p.add(f, "row has a value but no key")
 		}
-		if _, dup := labels[r.key]; dup && r.key != "" {
+		if dup && r.key != "" {
 			p.add(f, "label key %q is used twice", r.key)
 		}
 		p.text(f, r.key, 0)
@@ -228,16 +245,23 @@ func DecodePage(v url.Values) (mmv1.MaintenancePageSpec, []snapshot.Problem) {
 	p.text("html", spec.HTML, maxHTML)
 	p.text("fallbackLocale", spec.FallbackLocale, 0)
 	n := 0
-	for _, i := range sortedRows(&p, rows, "l0.tag", maxLocales) {
-		r := rows[i]
+	// Problems are numbered in the order the form shows the rows again: by
+	// tag, as EncodePage sorts them.
+	for _, r := range byKey(sortedRows(&p, rows, "l0.tag", maxLocales), rows, func(r *row) string { return r.tag }) {
 		if r.tag == "" && r.title == "" && r.message == "" {
 			continue
+		}
+		// A repeated tag folds into one row on the form, so its problem goes
+		// to that row, not to a blank one after it.
+		_, dup := spec.Locales[r.tag]
+		if dup {
+			n--
 		}
 		pre := "l" + strconv.Itoa(n) + "."
 		n++
 		if r.tag == "" {
 			p.add(pre+"tag", "row has a text but no tag")
-		} else if _, dup := spec.Locales[r.tag]; dup {
+		} else if dup {
 			p.add(pre+"tag", "locale %q is used twice", r.tag)
 		}
 		p.text(pre+"tag", r.tag, 0)

@@ -19,7 +19,10 @@ import (
 // arbitrary, so it runs in a sandbox (an opaque origin, no scripts, no forms).
 const previewCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'"
 
-type localeRow struct{ Tag, Title, Message string }
+type localeRow struct {
+	Tag, Title, Message string
+	Blank               bool // added empty by the form: hidden behind "Add" when scripts run
+}
 
 type pageForm struct {
 	Name, RV       string
@@ -74,7 +77,7 @@ func (s *Server) createPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "create", "MaintenancePage", name, nil, spec)
-	redirect(w, r, "/pages/"+pathEscape(name))
+	redirect(w, r, "/pages/"+pathEscape(name)+"?saved=1")
 }
 
 func (s *Server) updatePage(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +107,7 @@ func (s *Server) updatePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "update", "MaintenancePage", obj.Name, before, spec)
-	redirect(w, r, "/pages/"+pathEscape(obj.Name))
+	redirect(w, r, "/pages/"+pathEscape(obj.Name)+"?saved=1")
 }
 
 func (s *Server) deletePage(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +191,7 @@ func pageFormOf(name, rv string, isNew bool, spec *mmv1.MaintenancePageSpec, ps 
 		pre := "l" + itoa(k) + "."
 		f.Rows = append(f.Rows, localeRow{Tag: v.Get(pre + "tag"), Title: v.Get(pre + "title"), Message: v.Get(pre + "message")})
 	}
-	f.Rows = append(f.Rows, localeRow{}, localeRow{})
+	f.Rows = append(f.Rows, localeRow{Blank: true}, localeRow{Blank: true})
 	if !isNew {
 		f.Tags = slices.Sorted(maps.Keys(spec.Locales))
 	}

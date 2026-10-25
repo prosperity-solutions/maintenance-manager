@@ -6,24 +6,39 @@
 {{if .Warnings}}<div class="box warn"><strong>Warnings:</strong><ul>{{range .Warnings}}<li>{{.Field}}: {{.Message}}</li>{{end}}</ul></div>{{end}}
 <form method="post" action="{{if .New}}/windows/-/new{{else}}/windows/{{esc .Name}}{{end}}">
 <input type="hidden" name="tz"><input type="hidden" name="formTz" value="{{.FormTz}}"><input type="hidden" name="resourceVersion" value="{{.RV}}">
-{{if .New}}<p><label>Name <input name="name" value="{{.Name}}" required></label>{{template "fielderr" index .Errors "name"}} <span class="muted">cannot be changed later</span></p>{{end}}
+<div class="actions"><button class="primary">Save</button></div>
+{{if .New}}{{template "namefield" .}}{{end}}
 <p><label><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}}> Enabled</label>
-<label>Ends at <input type="datetime-local" step="1" name="endsAt" value="{{.EndsAt}}"></label><input type="hidden" name="endsAtWas" value="{{.EndsAtWas}}">
+<label>Ends at <span class="opt">optional</span> <input type="datetime-local" step="1" name="endsAt" value="{{.EndsAt}}"></label><input type="hidden" name="endsAtWas" value="{{.EndsAtWas}}">
 <span class="muted">times in {{.FormTz}}{{if .EndsAtDisplay}}: {{.EndsAtDisplay}}{{end}}</span>{{template "fielderr" index .Errors "endsAt"}}</p>
 {{if .Reopen}}<p class="warn"><label><input type="checkbox" name="reopen"> Reopen this ended window</label>{{template "fielderr" index .Errors "reopen"}}</p>{{end}}
-{{range $p := .Phases}}<fieldset><legend>Phase</legend>
-<label>Order <input name="p{{$p.I}}.order" value="{{$p.Order}}" size="3"></label>
-<label>Name <input name="p{{$p.I}}.name" value="{{$p.Name}}" size="20"></label>
-<label>Starts at <input type="datetime-local" step="1" name="p{{$p.I}}.startsAt" value="{{$p.StartsAt}}"></label><input type="hidden" name="p{{$p.I}}.startsAtWas" value="{{$p.StartsAtWas}}">
+<h2>Phases <span class="req">at least one</span></h2>
+<p class="hint">Phases run one after the other, by order. A phase without a start time starts when the window is enabled (the first one) or waits for "Start next phase" (a later one).</p>
+<div data-list>
+{{range $p := .Phases}}<fieldset class="row" data-row="p" data-i="{{$p.I}}"{{if $p.Blank}} data-blank{{end}}><legend>Phase</legend>
+<label>Order <input name="p{{$p.I}}.order" value="{{$p.Order}}" size="3" inputmode="numeric" pattern="[0-9]+" title="A whole number; lower runs first" data-order data-keep></label>
+<label>Name <span class="req">required</span> <input name="p{{$p.I}}.name" value="{{$p.Name}}" size="20" maxlength="63" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?" title="Lowercase letters, digits and -, no spaces, at most 63" placeholder="warn" autocapitalize="off" spellcheck="false"></label>
+<label>Starts at <span class="opt">optional</span> <input type="datetime-local" step="1" name="p{{$p.I}}.startsAt" value="{{$p.StartsAt}}"></label><input type="hidden" name="p{{$p.I}}.startsAtWas" value="{{$p.StartsAtWas}}">
 <label>Action <select name="p{{$p.I}}.action">{{range $p.Actions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (invalid){{end}}</option>{{end}}</select></label>
-{{if $p.Display}}<span class="muted">{{$p.Display}}</span>{{end}}
+<button type="button" class="small" data-remove hidden>Remove phase</button>
+{{if $p.Display}}<span class="hint">{{$p.Display}}</span>{{end}}
+<span class="hint">Order: a whole number, lower runs first. Name: lowercase letters, digits and <code>-</code>, no spaces, at most 63 (it goes into the <code>X-Maintenance-Manager</code> header). Action: <strong>banner</strong> lets requests through and tells the app; <strong>interstitial</strong> shows the page once per visitor; <strong>block</strong> shows the page with a 503.</span>
 {{range $f := (printf "p%d.order p%d.name p%d.startsAt p%d.action" $p.I $p.I $p.I $p.I | fields)}}{{template "fielderr" index $.D.Errors $f}}{{end}}
-{{range $r := $p.Routings}}<div>Routing: <label>Services <select multiple size="3" name="p{{$p.I}}.r{{$r.J}}.services">{{range $r.Services}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (missing){{end}}</option>{{end}}</select></label>
+<div data-list>
+<p class="hint">Which services, and which page they show. Add a second routing to show another page to other services.</p>
+{{range $r := $p.Routings}}<div class="row" data-row="p{{$p.I}}.r" data-i="{{$r.J}}"{{if $r.Blank}} data-blank{{end}}>
+<fieldset class="checks-group"><legend>Services <span class="req">at least one</span></legend>{{if not $r.Services}} <span class="muted">No services yet: <a href="/services/-/new">create one</a>.</span>{{end}}
+<div class="checks">{{range $r.Services}}<label><input type="checkbox" name="p{{$p.I}}.r{{$r.J}}.services" value="{{.Value}}"{{if .Selected}} checked{{end}}> {{.Label}}{{if .Missing}} <span class="err">(missing)</span>{{end}}</label>{{end}}</div></fieldset>
 <label>Page <select name="p{{$p.I}}.r{{$r.J}}.page">{{range $r.Pages}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (missing){{end}}</option>{{end}}</select></label>
+<button type="button" class="small" data-remove hidden>Remove routing</button>
 {{template "fielderr" index $.D.Errors (printf "p%d.r%d.services" $p.I $r.J)}}</div>{{end}}
+<button type="button" class="small" data-add hidden>+ Add routing</button>
+</div>
 </fieldset>{{end}}
-<p class="muted">Ctrl-click (Cmd-click on a Mac) selects several services; a plain click replaces the selection. The first phase without a start time starts when the window is enabled; a later phase without one is pending. Clear a phase's name, start time and services to drop it.</p>
-<button>Save</button>
+<button type="button" data-add hidden>+ Add phase</button>
+</div>
+<noscript><p class="hint">Clear a phase's name, start time, services and pages to drop it.</p></noscript>
+<div class="actions"><button class="primary">Save</button></div>
 </form>
 {{if not .New}}<form method="post" action="/windows/{{esc .Name}}/delete"><input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}"><p><button>Delete window</button></p></form>{{end}}
 {{end}}

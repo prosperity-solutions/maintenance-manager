@@ -24,12 +24,14 @@ type option struct {
 
 type routingForm struct {
 	J        int
+	Blank    bool // added empty by the form: hidden behind "Add" when scripts run
 	Services []option
 	Pages    []option
 }
 
 type phaseForm struct {
 	I                                          int
+	Blank                                      bool
 	Order, Name, StartsAt, StartsAtWas, Action string
 	Display                                    string // startsAt shown with both zones
 	Actions                                    []option
@@ -198,7 +200,7 @@ func (s *Server) createWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "create", "MaintenanceWindow", name, nil, spec)
-	redirect(w, r, "/windows/"+pathEscape(name))
+	redirect(w, r, "/windows/"+pathEscape(name)+"?saved=1")
 }
 
 func (s *Server) updateWindow(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +243,7 @@ func (s *Server) updateWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "update", "MaintenanceWindow", obj.Name, before, spec)
-	redirect(w, r, "/windows/"+pathEscape(obj.Name))
+	redirect(w, r, "/windows/"+pathEscape(obj.Name)+"?saved=1")
 }
 
 func (s *Server) deleteWindow(w http.ResponseWriter, r *http.Request) {
@@ -261,7 +263,7 @@ func (s *Server) setEnabled(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit(r, "disable", "MaintenanceWindow", name, nil, map[string]any{"enabled": false})
-		redirect(w, r, "/")
+		redirect(w, r, "/?saved=1")
 		return
 	}
 	if err := s.API.Get(r.Context(), client.ObjectKeyFromObject(obj), obj); err != nil {
@@ -279,7 +281,7 @@ func (s *Server) setEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "enable", "MaintenanceWindow", name, nil, map[string]any{"enabled": true})
-	redirect(w, r, "/")
+	redirect(w, r, "/?saved=1")
 }
 
 const writeErrorConflict = "changed by someone else since you loaded this page: reload it, then redo your change"
@@ -312,7 +314,7 @@ func (s *Server) startNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "next", "MaintenanceWindow", obj.Name, before, obj.Spec)
-	redirect(w, r, "/")
+	redirect(w, r, "/?saved=1")
 }
 
 func (s *Server) windowPage(w http.ResponseWriter, r *http.Request, status int, loc *time.Location, name, rv string, isNew bool, spec *mmv1.MaintenanceWindowSpec, ps []snapshot.Problem, notice string, sub *submitted) {
@@ -396,7 +398,7 @@ func (s *Server) windowForm(r *http.Request, loc *time.Location, name, rv string
 	}
 	for k := range blankRows {
 		i := len(spec.Phases) + k
-		pf := phaseForm{I: i, Order: itoa(i + 1), Action: string(mmv1.ActionBlock), Actions: actionOptions(string(mmv1.ActionBlock))}
+		pf := phaseForm{I: i, Blank: true, Order: itoa(i + 1), Action: string(mmv1.ActionBlock), Actions: actionOptions(string(mmv1.ActionBlock))}
 		pf.Routings = appendBlankRoutings(nil, svcNames, pageNames)
 		f.Phases = append(f.Phases, pf)
 	}
@@ -405,7 +407,7 @@ func (s *Server) windowForm(r *http.Request, loc *time.Location, name, rv string
 
 func appendBlankRoutings(rs []routingForm, svcNames, pageNames map[string]bool) []routingForm {
 	for range blankRows {
-		rs = append(rs, routingForm{J: len(rs), Services: serviceOptions(nil, svcNames), Pages: pageOptions("", pageNames)})
+		rs = append(rs, routingForm{J: len(rs), Blank: true, Services: serviceOptions(nil, svcNames), Pages: pageOptions("", pageNames)})
 	}
 	return rs
 }
@@ -428,7 +430,7 @@ func actionOptions(selected string) []option {
 }
 
 // serviceOptions lists the selected services first, in stored order (a
-// browser submits a multi-select in option order, so this keeps the order on
+// browser submits checked boxes in document order, so this keeps the order on
 // save), including names that do not exist (marked missing, so a save keeps
 // them), then the other services by name.
 func serviceOptions(selected []string, existing map[string]bool) []option {

@@ -19,6 +19,13 @@ textarea{width:100%;font-family:ui-monospace,monospace;font-size:.85em}button{cu
 .state{display:inline-block;padding:0 .45rem;border-radius:.3rem;border:1px solid currentColor;font-size:.85em}
 .state-active{color:var(--red)}.state-armed{color:var(--amber)}.state-invalid{color:var(--red)}.state-idle,.state-ended{color:var(--muted)}
 .inline{display:inline}.box{border:1px solid var(--line);border-radius:.4rem;padding:.6rem .8rem;margin:.6rem 0}
+.hint{display:block;color:var(--muted);font-size:.85em;margin:.1rem 0 .3rem}.req{color:var(--red);font-size:.8em;margin-left:.2rem}.opt{color:var(--muted);font-size:.8em;margin-left:.2rem}
+label.block{display:block;margin:.4rem 0}label.block>input,label.block>select{display:block;margin-top:.15rem}
+div.row{border-top:1px dashed var(--line);padding:.4rem 0}div.row:first-of-type{border-top:0}[hidden]{display:none!important}
+.actions{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:.6rem 0}button.primary{background:var(--accent);color:var(--bg)}button.small{font-size:.85em;padding:.1rem .45rem}
+fieldset.checks-group{border:0;padding:0;margin:.2rem 0}fieldset.checks-group>legend{color:inherit;padding:0}.checks{display:flex;flex-wrap:wrap;gap:.2rem 1rem;margin:.2rem 0}.checks label{margin:0}
+.toast{pointer-events:none;position:fixed;top:1rem;right:1rem;z-index:10;padding:.5rem .9rem;border-radius:.4rem;background:var(--green);color:var(--bg);font-weight:600;animation:toast-out .3s ease-in 5s forwards}
+@keyframes toast-out{to{opacity:0;visibility:hidden}}@media (prefers-reduced-motion:reduce){.toast{animation-duration:0s}}
 </style>
 </head>
 <body>
@@ -26,6 +33,7 @@ textarea{width:100%;font-family:ui-monospace,monospace;font-size:.85em}button{cu
 <a href="/">Dashboard</a><a href="/windows">Windows</a><a href="/services">Services</a><a href="/pages">Pages</a>
 <form class="zone" method="post" action="/tz">Times in {{.Zone}} <input type="hidden" name="tz"><button>Use my time zone</button></form>
 </nav>
+{{if .Saved}}<div class="toast" role="status">✓ Changes saved</div>{{end}}
 {{end}}
 
 {{define "foot"}}
@@ -37,3 +45,6 @@ textarea{width:100%;font-family:ui-monospace,monospace;font-size:.85em}button{cu
 {{define "problems"}}{{if .}}<div class="box err"><strong>Please fix:</strong><ul>{{range .}}<li>{{.Field}}: {{.Message}}</li>{{end}}</ul></div>{{end}}{{end}}
 
 {{define "fielderr"}}{{range .}}<span class="err"> {{.}}</span>{{end}}{{end}}
+
+{{define "namefield"}}<p><label class="block">Name <span class="req">required</span> <input name="name" value="{{.Name}}" required maxlength="253" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)*" title="Lowercase letters, digits, - and .; no spaces; each part between dots starts and ends with a letter or digit" autocapitalize="off" spellcheck="false"></label>
+<span class="hint">Lowercase letters, digits, <code>-</code> and <code>.</code>, at most 253; no spaces; each part between dots starts and ends with a letter or digit (<code>shop</code>, <code>shop-eu.v2</code>). Cannot be changed later.</span>{{template "fielderr" index .Errors "name"}}</p>{{end}}
