@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -100,7 +104,7 @@ func TestAuthAndHeaders(t *testing.T) {
 			t.Errorf("%s: want %q, got %q", k, v, w.Header().Get(k))
 		}
 	}
-	if !strings.Contains(w.Body.String(), "<script>"+tzScript+"</script>") {
+	if !strings.Contains(w.Body.String(), "<script>"+editorJS+"</script>") {
 		t.Fatal("the tz script must be rendered verbatim, or its CSP hash does not match")
 	}
 }
@@ -854,5 +858,174 @@ func TestInvalidStoredValuesSurviveTheForm(t *testing.T) {
 	}
 	if w := do(t, h, http.MethodPost, "/windows/w", url.Values{"formTz": {"UTC"}}); w.Code != http.StatusBadRequest {
 		t.Fatalf("an update without resourceVersion: want 400, got %d", w.Code)
+	}
+}
+
+// TestFormsForScripts: blank rows are marked for editor.js, its buttons stay
+// hidden without it, a save lands on "Changes saved", and the script is the
+// one the CSP allows.
+func TestFormsForScripts(t *testing.T) {
+	s, _ := newServer(t,
+		&mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "shop"}, Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "shop"}}}},
+		&mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "w"}, Spec: mmv1.MaintenanceWindowSpec{Phases: []mmv1.Phase{
+			{Name: "warn", Action: mmv1.ActionBanner, Routings: []mmv1.Routing{{Services: []string{"shop"}}}},
+		}}},
+	)
+	h := s.Handler()
+	dump := os.Getenv("MM_EDITOR_DUMP") // a directory: write each screen there, to look at in a browser
+	for _, c := range []struct {
+		path         string
+		blank, lists int
+	}{
+		{"/services/-/new", 2, 1},
+		{"/services/shop", 2, 1},
+		{"/pages/-/new", 2, 1},
+		{"/windows/-/new", 2 + 2*2, 1 + 2},
+		{"/windows/w", 2 + 2 + 2*2, 1 + 3},
+	} {
+		w := do(t, h, http.MethodGet, c.path, nil)
+		body := w.Body.String()
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d", c.path, w.Code)
+		}
+		if n := strings.Count(body, " data-blank>"); n != c.blank {
+			t.Errorf("%s: %d blank rows, want %d", c.path, n, c.blank)
+		}
+		if n := strings.Count(body, "<div data-list>"); n != c.lists {
+			t.Errorf("%s: %d lists, want %d", c.path, n, c.lists)
+		}
+		if strings.Contains(body, "data-add>") || strings.Contains(body, "data-remove>") {
+			t.Errorf("%s: an Add or Remove button shows without scripts", c.path)
+		}
+		if strings.Count(body, `<button class="primary">Save</button>`) != 2 {
+			t.Errorf("%s: want Save at the top and the bottom", c.path)
+		}
+		if !strings.Contains(w.Header().Get("Content-Security-Policy"), "'sha256-"+scriptHash()+"'") || !strings.Contains(body, "<script>"+editorJS+"</script>") {
+			t.Errorf("%s: the inline script is not the one the CSP allows", c.path)
+		}
+		if dump != "" {
+			if err := os.WriteFile(filepath.Join(dump, strings.NewReplacer("/", "_", "-", "").Replace(c.path)+".html"), []byte(body), 0o600); err != nil { //nolint:gosec // G703: the developer names this directory, test-only
+				t.Fatal(err)
+			}
+		}
+	}
+	if strings.Contains(do(t, h, http.MethodGet, "/windows/w", nil).Body.String(), `class="toast"`) {
+		t.Fatal("the saved note shows without a save")
+	}
+	if !strings.Contains(do(t, h, http.MethodGet, "/windows/w?saved=1", nil).Body.String(), `<div class="toast" role="status">✓ Changes saved</div>`) {
+		t.Fatal("no saved note after a save")
+	}
+	form := browserSubmit(t, do(t, h, http.MethodGet, "/services/shop", nil).Body.String(), "/services/shop")
+	form.Set("sel0.value", "shop2")
+	w := do(t, h, http.MethodPost, "/services/shop", form)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/services/shop?saved=1" {
+		t.Fatalf("save: %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// TestFieldPatternsMatchTheServer: a pattern on a field must never refuse a
+// value the server accepts, nor accept one it refuses.
+func TestFieldPatternsMatchTheServer(t *testing.T) {
+	s, _ := newServer(t, &mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "w"}, Spec: mmv1.MaintenanceWindowSpec{Phases: []mmv1.Phase{
+		{Name: "warn", Action: mmv1.ActionBanner, Routings: []mmv1.Routing{{Services: []string{"x"}}}},
+	}}})
+	h := s.Handler()
+	pattern := func(page, field string) *regexp.Regexp {
+		t.Helper()
+		m := regexp.MustCompile(`name="` + regexp.QuoteMeta(field) + `"[^>]*pattern="([^"]+)"`).FindStringSubmatch(page)
+		if m == nil {
+			t.Fatalf("no pattern on %s", field)
+		}
+		return regexp.MustCompile("^(?:" + html.UnescapeString(m[1]) + ")$")
+	}
+	newPage := do(t, h, http.MethodGet, "/windows/-/new", nil).Body.String()
+	edit := do(t, h, http.MethodGet, "/windows/w", nil).Body.String()
+	corpus := []string{"a", "shop", "shop-eu", "shop.eu", "shop-eu.v2", "a1.b2.c3", "1a", "a.b.c",
+		"", "-a", "a-", "a..b", "a.-b", "a-.b", ".a", "a.", "Shop", "shop eu", " shop", "a_b", "a/b", "ä",
+		strings.Repeat("a", 63), strings.Repeat("a", 64)}
+	name := pattern(newPage, "name")
+	phase := pattern(edit, "p0.name")
+	order := pattern(edit, "p0.order")
+	for _, v := range corpus {
+		if v != "" && name.MatchString(v) != (len(validation.IsDNS1123Subdomain(v)) == 0) {
+			t.Errorf("object name %q: pattern %v, server %v", v, name.MatchString(v), validation.IsDNS1123Subdomain(v))
+		}
+		if v != "" && len(v) <= 63 && phase.MatchString(v) != (len(validation.IsDNS1123Label(v)) == 0) {
+			t.Errorf("phase name %q: pattern %v, server %v", v, phase.MatchString(v), validation.IsDNS1123Label(v))
+		}
+	}
+	for _, v := range []string{"0", "1", "10", "007", "-1", "1.5", "a", " 1"} {
+		_, ok := parseOrder(v)
+		if order.MatchString(v) != ok {
+			t.Errorf("order %q: pattern %v, server %v", v, order.MatchString(v), ok)
+		}
+	}
+}
+
+// TestRemovedRowsAreDropped submits rows cleared the way editor.js's Remove
+// clears them and checks only those rows go.
+func TestRemovedRowsAreDropped(t *testing.T) {
+	win := mmv1.MaintenanceWindowSpec{Phases: []mmv1.Phase{
+		{Name: "warn", Action: mmv1.ActionBanner, Routings: []mmv1.Routing{{Services: []string{"a"}}, {Services: []string{"b"}, Page: "p"}}},
+		{Name: "down", Action: mmv1.ActionBlock, Routings: []mmv1.Routing{{Services: []string{"a"}, Page: "p"}}},
+	}}
+	page := mmv1.MaintenancePageSpec{FallbackLocale: "en", Locales: map[string]mmv1.PageText{"en": {Title: "Back soon"}, "de": {Title: "Gleich zurück", Message: "x"}}}
+	svc := mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "a", "tier": "web"}}}
+	s, c := newServer(t,
+		&mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "w"}, Spec: win},
+		&mmv1.MaintenancePage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "p"}, Spec: page},
+		&mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "a"}, Spec: svc},
+		&mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "b"}, Spec: svc},
+	)
+	h := s.Handler()
+	submit := func(path string, edit func(url.Values)) {
+		t.Helper()
+		form := browserSubmit(t, do(t, h, http.MethodGet, path, nil).Body.String(), path)
+		edit(form)
+		if w := do(t, h, http.MethodPost, path, form); w.Code != http.StatusSeeOther {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+	// Remove: text emptied, boxes unticked, selects on their first option,
+	// the phase order kept.
+	submit("/windows/w", func(v url.Values) {
+		v.Set("p1.name", "")
+		v.Set("p1.startsAt", "")
+		v.Set("p1.startsAtWas", "")
+		v.Set("p1.action", "banner")
+		v.Del("p1.r0.services")
+		v.Set("p1.r0.page", "")
+		v.Del("p0.r1.services")
+		v.Set("p0.r1.page", "")
+	})
+	submit("/pages/p", func(v url.Values) { // de sorts first
+		v.Set("l0.tag", "")
+		v.Set("l0.title", "")
+		v.Set("l0.message", "")
+	})
+	submit("/services/a", func(v url.Values) { // app sorts first
+		v.Set("sel0.key", "")
+		v.Set("sel0.value", "")
+	})
+	var w mmv1.MaintenanceWindow
+	var p mmv1.MaintenancePage
+	var sv mmv1.MaintenanceService
+	for _, o := range []struct {
+		name string
+		obj  client.Object
+	}{{"w", &w}, {"p", &p}, {"a", &sv}} {
+		if err := c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: o.name}, o.obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantWin := []mmv1.Phase{{Name: "warn", Action: mmv1.ActionBanner, Routings: []mmv1.Routing{{Services: []string{"a"}}}}}
+	if !equality.Semantic.DeepEqual(w.Spec.Phases, wantWin) {
+		t.Errorf("window: %+v", w.Spec.Phases)
+	}
+	if _, ok := p.Spec.Locales["de"]; ok || len(p.Spec.Locales) != 1 {
+		t.Errorf("page locales: %+v", p.Spec.Locales)
+	}
+	if !equality.Semantic.DeepEqual(sv.Spec.RouteSelector.MatchLabels, map[string]string{"tier": "web"}) {
+		t.Errorf("service labels: %+v", sv.Spec.RouteSelector.MatchLabels)
 	}
 }

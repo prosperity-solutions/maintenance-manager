@@ -42,12 +42,12 @@ const (
 	viewTimeout = 10 * time.Second
 )
 
-// tzScript is the editor's only JavaScript (§10): it fills every hidden tz
-// field with the browser's time zone. The CSP allows exactly this script by
-// its hash.
-const tzScript = `document.querySelectorAll("input[name=tz]").forEach(function(e){e.value=Intl.DateTimeFormat().resolvedOptions().timeZone})`
-
 var (
+	// editorJS is the editor's only JavaScript (§10): the browser's time zone
+	// for the hidden tz fields, and Add/Remove for repeated rows. Every form
+	// works without it. The CSP allows exactly this script by its hash.
+	//go:embed editor.js
+	editorJS string
 	//go:embed templates/*.html
 	templateFS embed.FS
 	pages      = template.Must(template.New("").Funcs(funcs).ParseFS(templateFS, "templates/*.html"))
@@ -55,7 +55,7 @@ var (
 )
 
 func scriptHash() string {
-	h := sha256.Sum256([]byte(tzScript))
+	h := sha256.Sum256([]byte(editorJS))
 	return base64.StdEncoding.EncodeToString(h[:])
 }
 
@@ -370,8 +370,9 @@ func (s *Server) view(ctx context.Context) (controller.View, error) {
 // page renders a template inside the layout.
 func (s *Server) page(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
 	var b strings.Builder
-	script := template.JS(tzScript) //nolint:gosec // G203: a constant, allowed by its CSP hash
-	if err := pages.ExecuteTemplate(&b, name, map[string]any{"D": data, "Zone": zone(r).String(), "Script": script, "Path": r.URL.Path}); err != nil {
+	script := template.JS(editorJS) //nolint:gosec // G203: embedded at build time, allowed by its CSP hash
+	saved := r.Method == http.MethodGet && r.URL.Query().Get("saved") == "1"
+	if err := pages.ExecuteTemplate(&b, name, map[string]any{"D": data, "Zone": zone(r).String(), "Script": script, "Path": r.URL.Path, "Saved": saved}); err != nil {
 		s.Log.Error("editor template", "template", name, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -455,7 +456,8 @@ func join(prefix, k string) string {
 }
 
 // redirect answers a successful POST with 303 to target, always one of our
-// own paths ("/", or "/<kind>/" plus an escaped object name).
+// own paths ("/", or "/<kind>/" plus an escaped object name), optionally with
+// "?saved=1", which shows the "Changes saved" note.
 func redirect(w http.ResponseWriter, r *http.Request, target string) {
 	rememberTZ(w, r)
 	http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: target is built from our own paths, see above

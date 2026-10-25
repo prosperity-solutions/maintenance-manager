@@ -515,10 +515,11 @@ func TestPageRowsAndNormalisation(t *testing.T) {
 	if got.Locales == nil {
 		t.Error("locales must not be nil")
 	}
-	// Numeric order decides which duplicate is reported at which row.
+	// A duplicate folds into one row when the form is shown again, so it is
+	// reported on that row, not on the blank row after it.
 	v = url.Values{"l9.tag": {"en"}, "l10.tag": {"en"}}
 	_, ps = DecodePage(v)
-	if len(ps) != 1 || ps[0].Field != "l1.tag" {
+	if len(ps) != 1 || ps[0].Field != "l0.tag" {
 		t.Errorf("duplicate tag: %v", ps)
 	}
 	// Text without a tag is a problem, not silent loss.
@@ -600,7 +601,7 @@ func TestServiceRows(t *testing.T) {
 
 	// Duplicate key, value without a key, create without old.
 	_, ps = DecodeService(url.Values{"sel0.key": {"a"}, "sel1.key": {"a"}}, nil)
-	if len(ps) != 1 || ps[0].Field != "sel1.key" {
+	if len(ps) != 1 || ps[0].Field != "sel0.key" {
 		t.Fatalf("duplicate: %v", ps)
 	}
 	_, ps = DecodeService(url.Values{"sel0.value": {"v"}}, nil)

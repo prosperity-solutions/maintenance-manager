@@ -41,7 +41,7 @@ Target clusters today run EG **v1.9.1** and EG **v1.8.3**. Use only API fields t
 - **Fail-open.** If maintenance-manager is down, slow or misconfigured, traffic flows to the apps as if it didn't exist.
 - **Coexists with platform auth.** Our policy merges into Gateway-level SecurityPolicies instead of replacing them.
 - **No database.** All state lives in Kubernetes custom resources (etcd).
-- **Ugly but robust editor.** Server-rendered HTML forms, no framework, no build step, one line of JS.
+- **Ugly but robust editor.** Server-rendered HTML forms, no framework, no build step, one small inline script (`editor.js`) that every form works without.
 
 ### Naming (trademark-compliant)
 
@@ -456,7 +456,7 @@ The first hit wins; otherwise use `fallbackLocale`. Each page precomputes a map 
 
 ## 10. Editor (port 8080)
 
-Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** is one line that fills a hidden `tz` field with `Intl.DateTimeFormat().resolvedOptions().timeZone`.
+Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** is `internal/editor/editor.js`, inlined and allowed by its CSP hash. It fills the hidden `tz` fields with `Intl.DateTimeFormat().resolvedOptions().timeZone`, hides the blank rows behind an **+ Add** button (copying a blank row with the next index when none is left), and gives each row a **Remove** button that clears it, which the server reads as a dropped row. **Every form works without it:** the blank rows then show, and clearing a row drops it.
 
 **Auth:** HTTP basic auth, user `admin`. The password comes from env `MM_EDITOR_PASSWORD`, which the chart fills from `editor.password` or `editor.existingSecret`. **The install fails if neither is set.** The password is compared in constant time.
 
@@ -475,11 +475,13 @@ Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** 
 
 **Forms:**
 - **Field names:**
-  - **Windows:** `enabled`, `endsAt`, `p{i}.order`, `p{i}.name`, `p{i}.startsAt`, `p{i}.action`, `p{i}.r{j}.services` (multi-select), `p{i}.r{j}.page`
+  - **Windows:** `enabled`, `endsAt`, `p{i}.order`, `p{i}.name`, `p{i}.startsAt`, `p{i}.action`, `p{i}.r{j}.services` (one checkbox per service), `p{i}.r{j}.page`
   - **Pages:** `fallbackLocale`, `html`, `l{k}.tag`, `l{k}.title`, `l{k}.message`
   - **Services:** `sel{k}.key`, `sel{k}.value`
   - **All forms:** `resourceVersion`, `tz`
-- **Blank rows:** every variable-length list renders **2 extra blank rows**. A row is blank when its identifying fields are empty: name and services for phases and routings, `tag` for locales, `key` for selector rows. Blank rows are ignored. There is no JS add-row.
+- **Blank rows:** every variable-length list renders **2 extra blank rows**. A row is blank when every field the decoder reads is empty: a phase's name, start time, services and page (its prefilled order and its action do not count), a routing's services and page, a locale's tag, title and message, a selector row's key and value. Blank rows are dropped, which is also what **Remove** relies on: it empties those fields. With scripts on, they wait behind **+ Add** (see above).
+- **Save** sits at the top and the bottom of every form. A successful save redirects with `?saved=1`, which shows a "Changes saved" note that CSS hides after 5 s (no script).
+- **Rules next to the fields:** every restricted input says what it accepts (object names: DNS-1123 subdomain; phase names: DNS label, 63; locale tags; label keys and values) and marks required and optional fields; object and phase names also carry an HTML `pattern`.
 - **Names and deletes:** `metadata.name` can only be set on create. **Delete** refuses to remove a page or service that a window references.
 
 **Time:**
@@ -498,7 +500,7 @@ Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** 
 
 **As built (M5):**
 - **Time zones:** forms are decoded in the zone they were *rendered* in (hidden `formTz`), never in the browser's current zone, so an untouched time cannot move by an offset on save. The browser's zone (the JS-filled `tz` field, on every form) is remembered in an `mm_tz` cookie (HttpOnly, SameSite=Strict) and used for the next page; until then pages show UTC, and the nav bar has a "Use my time zone" button. Each time input also carries the stored instant (`endsAtWas`, `p{i}.startsAtWas`): a submitted value equal to it shown in `formTz` keeps the stored instant exactly, so the second copy of a DST-overlap hour survives a save. Inputs use `step=1` (seconds).
-- **Blank rows:** a row is dropped only when *all* its fields are empty (a phase's prefilled order does not count); a row with text but no key, tag or phase name, or a routing with a page but no services, is an error rather than silently lost; a page-only routing stays on the form; duplicate keys or tags are reported and the form then shows one of them (stricter than "identifying fields empty" above, so a cleared name never discards a start time). The hints on the forms say so.
+- **Blank rows:** a row is dropped only when *all* its fields are empty (a phase's prefilled order does not count); a row with text but no key, tag or phase name, or a routing with a page but no services, is an error rather than silently lost; a page-only routing stays on the form; duplicate keys or tags are reported and the form then shows one of them (so a cleared name never discards a start time). The hints on the forms say so.
 - **Typos stay visible:** a time that fails to decode (DST gap, garbage) is shown again exactly as typed on the error page, so fixing another error and saving cannot silently turn it into "starts when enabled" or "pending".
 - **Zone check on save:** a browser that never told the editor its zone saw the form in UTC; if its `tz` differs (by offset, so `Etc/UTC` equals `UTC`), nothing is saved and the form comes back in the browser's zone with a notice. Times the operator typed come back exactly as typed, with no stored instant, so the next save reads them in the browser's zone; untouched times are shown converted and keep their instant. So a typed 18:00 is not stored two hours off.
 - **Enable says what it starts:** on a disabled window the button reads "Enable: phase X starts at once" when the clock puts a phase in effect, with a pointer to setting a later phase's start in the same save.
@@ -506,7 +508,7 @@ Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** 
 - **Zone check first:** the zone-mismatch check runs before any time-based validation.
 - **Reopening an ended window** (clearing or moving `endsAt` on an enabled window that has ended) makes its last phase active at once, so the save asks for a "Reopen" tick first.
 - **Delete** needs the form's resourceVersion (a precondition). Its reference check is best effort: a window saved in between still works (default page, skipped service, §4.4 rule 9). The audit line for enable/disable names the field (the verb says which way); the client is the peer address without the port.
-- **Lossless forms:** tested by rendering the edit page, submitting it the way a browser does (option order for multi-selects, CRLF in textareas, the newline after `<textarea>` dropped) and comparing the stored spec. A multi-select lists the selected services first, in stored order, and keeps names that do not exist (marked "missing"); textareas (messages, titles and the HTML) are normalised to LF, and titles are textareas so a newline in one survives; an action outside the three (written with kubectl) stays selected, marked invalid; a duplicate service stays; `matchExpressions` are shown read-only and kept. Lengths are counted in characters (runes), as the CRD does. Native fuzz tests cover the three decoders.
+- **Lossless forms:** tested by rendering the edit page, submitting it the way a browser does (checked boxes in document order, CRLF in textareas, the newline after `<textarea>` dropped) and comparing the stored spec. A multi-select lists the selected services first, in stored order, and keeps names that do not exist (marked "missing"); textareas (messages, titles and the HTML) are normalised to LF, and titles are textareas so a newline in one survives; an action outside the three (written with kubectl) stays selected, marked invalid; a duplicate service stays; `matchExpressions` are shown read-only and kept. Lengths are counted in characters (runes), as the CRD does. Native fuzz tests cover the three decoders.
 - **Paths:** `/{kind}/-/new` and `/pages/-/preview`, because `-` can never be a Kubernetes name.
 - **Concurrency:** edit forms and the object written are read uncached (`APIReader`), so a save right after a redirect does not hit a stale cache; the form's `resourceVersion` goes into the `Update`. **Disable is the emergency stop:** a merge patch `{"spec":{"enabled":false}}` without a resourceVersion, so it works on a window someone just changed, an invalid one or an ended one. Enable and Start next phase now check the resourceVersion they were shown with, and Start next phase now also refuses if the active phase moved.
 - **§4.4 rule 5:** `startsAt = max(now, previous start + 1 s)` truncated to seconds; an undated active phase 0 counts as "now". A result that would make the window invalid (e.g. after `endsAt`) is refused. §4.4 rule 3's "a changed `endsAt` must not be in the past" compares instants.

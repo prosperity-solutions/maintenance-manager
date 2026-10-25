@@ -5,13 +5,19 @@
 {{template "problems" .All}}
 <form method="post" action="{{if .New}}/services/-/new{{else}}/services/{{esc .Name}}{{end}}">
 <input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}">
-{{if .New}}<p><label>Name <input name="name" value="{{.Name}}" required></label>{{template "fielderr" index .Errors "name"}} <span class="muted">cannot be changed later</span></p>{{end}}
-<fieldset><legend>Route labels (all must match)</legend>
-{{range $k, $r := .Rows}}<div><label>Key <input name="sel{{$k}}.key" value="{{$r.Key}}"></label><label>Value <input name="sel{{$k}}.value" value="{{$r.Value}}"></label>{{template "fielderr" index $.D.Errors (printf "sel%d.key" $k)}}</div>{{end}}
-<p class="muted">Clear a row's key and value to drop it.</p>
+<div class="actions"><button class="primary">Save</button></div>
+{{if .New}}{{template "namefield" .}}{{end}}
+<fieldset><legend>Route labels <span class="req">required</span></legend>
+<p class="hint">The service is every HTTPRoute, in any namespace, that carries <strong>all</strong> of these labels. At least one. Several apps can share a service when their routes share a label.</p>
+<div data-list>
+{{range $k, $r := .Rows}}<div class="row" data-row="sel" data-i="{{$k}}"{{if $r.Blank}} data-blank{{end}}><label>Key <span class="req">required</span> <input name="sel{{$k}}.key" value="{{$r.Key}}" maxlength="317" placeholder="example.com/app" autocapitalize="off" spellcheck="false"></label><label>Value <span class="opt">optional</span> <input name="sel{{$k}}.value" value="{{$r.Value}}" maxlength="63" placeholder="shop" autocapitalize="off" spellcheck="false"></label> <button type="button" class="small" data-remove hidden>Remove label</button>{{template "fielderr" index $.D.Errors (printf "sel%d.key" $k)}}
+<span class="hint">Key: a name of letters, digits, <code>-</code>, <code>_</code> and <code>.</code> (at most 63, starting and ending with a letter or digit), optionally after a lowercase DNS prefix and <code>/</code> (<code>example.com/app</code>). Value: the same characters, at most 63, or empty. No spaces.</span></div>{{end}}
+<button type="button" class="small" data-add hidden>+ Add label</button>
+</div>
+<noscript><p class="hint">Clear a row's key and value to drop it.</p></noscript>
 {{if .Expressions}}<p>Also matchExpressions (edit with kubectl; kept on save): <code>{{.Expressions}}</code></p>{{end}}
 </fieldset>
-<button>Save</button>
+<div class="actions"><button class="primary">Save</button></div>
 </form>
 {{if not .New}}
 <h2>Matched routes</h2>

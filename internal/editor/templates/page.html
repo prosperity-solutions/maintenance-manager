@@ -5,22 +5,34 @@
 {{template "problems" .All}}
 <form method="post" action="{{if .New}}/pages/-/new{{else}}/pages/{{esc .Name}}{{end}}">
 <input type="hidden" name="tz"><input type="hidden" name="resourceVersion" value="{{.RV}}">
-{{if .New}}<p><label>Name <input name="name" value="{{.Name}}" required></label>{{template "fielderr" index .Errors "name"}} <span class="muted">cannot be changed later</span></p>{{end}}
-<p><label>Fallback locale <input name="fallbackLocale" value="{{.FallbackLocale}}" size="8"></label>{{template "fielderr" index .Errors "fallbackLocale"}}</p>
-{{range $k, $r := .Rows}}<fieldset><legend>Locale</legend>
-<label>Tag <input name="l{{$k}}.tag" value="{{$r.Tag}}" size="8" placeholder="de-CH"></label>{{template "fielderr" index $.D.Errors (printf "l%d.tag" $k)}}
-<label>Title</label><textarea name="l{{$k}}.title" rows="1">
-{{$r.Title}}</textarea>
-<div><label>Message</label><textarea name="l{{$k}}.message" rows="2">
-{{$r.Message}}</textarea></div></fieldset>{{end}}
-<p class="muted">Clear a locale's tag, title and message to drop it.</p>
-<p><label>HTML template (empty = built-in page; allowed: text, {{"{{"}}.Title{{"}}"}} .Message .Locale .Until .Interstitial, if/else, with, eq ne lt le gt ge and or not len)</label>{{template "fielderr" index .Errors "html"}}
+<div class="actions"><button class="primary">Save</button></div>
+{{if .New}}{{template "namefield" .}}{{end}}
+<p><label class="block">Fallback locale <span class="req">required</span> <input name="fallbackLocale" value="{{.FallbackLocale}}" size="8" placeholder="en" autocapitalize="off" spellcheck="false"></label>
+<span class="hint">Shown when none of the visitor's languages matches. Must be one of the locales below.</span>{{template "fielderr" index .Errors "fallbackLocale"}}</p>
+<fieldset><legend>Locales <span class="req">at least one</span></legend>
+<p class="hint">One block per language. The visitor's browser languages pick the block; title and message may be empty.</p>
+<div data-list>
+{{range $k, $r := .Rows}}<div class="row" data-row="l" data-i="{{$k}}"{{if $r.Blank}} data-blank{{end}}>
+<label>Tag <span class="req">required</span> <input name="l{{$k}}.tag" value="{{$r.Tag}}" size="8" placeholder="de-CH" autocapitalize="off" spellcheck="false"></label>
+<button type="button" class="small" data-remove hidden>Remove locale</button>{{template "fielderr" index $.D.Errors (printf "l%d.tag" $k)}}
+<span class="hint">A language tag: <code>en</code>, <code>de</code>, <code>de-CH</code>.</span>
+<label class="block">Title <span class="opt">optional</span><textarea name="l{{$k}}.title" rows="1">
+{{$r.Title}}</textarea></label>{{template "fielderr" index $.D.Errors (printf "l%d.title" $k)}}
+<label class="block">Message <span class="opt">optional</span><textarea name="l{{$k}}.message" rows="2">
+{{$r.Message}}</textarea></label>{{template "fielderr" index $.D.Errors (printf "l%d.message" $k)}}
+</div>{{end}}
+<button type="button" class="small" data-add hidden>+ Add locale</button>
+</div>
+<noscript><p class="hint">Clear a locale's tag, title and message to drop it.</p></noscript>
+</fieldset>
+<p><label class="block">HTML template <span class="opt">optional: empty means the built-in page</span>{{template "fielderr" index .Errors "html"}}
 <textarea name="html" rows="16">
-{{.HTML}}</textarea></p>
-<p><button>Save</button>
+{{.HTML}}</textarea></label>
+<span class="hint">A <strong>Go <code>html/template</code></strong> (not Handlebars), limited to a safe subset: text, <code>{{"{{"}}.Title{{"}}"}}</code> <code>.Message</code> <code>.Locale</code> <code>.Until</code> <code>.Interstitial</code>, <code>if</code>/<code>else</code>, <code>with</code>, and <code>eq ne lt le gt ge and or not len</code>.</span></p>
+<div class="actions"><button class="primary">Save</button>
 <label>Preview locale <input name="previewLocale" value="{{.FallbackLocale}}" size="8"></label>
 <select name="previewAction"><option value="block">block</option><option value="interstitial">interstitial</option></select>
-<button formaction="/pages/-/preview" formtarget="_blank">Preview this form</button></p>
+<button formaction="/pages/-/preview" formtarget="_blank">Preview this form</button></div>
 </form>
 {{if not .New}}
 <p>Preview saved page: {{$n := .Name}}{{range .Tags}}<a href="/pages/{{esc $n}}/preview?locale={{.}}&amp;action=block" target="_blank" rel="noopener">{{.}} block</a> · <a href="/pages/{{esc $n}}/preview?locale={{.}}&amp;action=interstitial" target="_blank" rel="noopener">{{.}} interstitial</a> · {{end}}</p>

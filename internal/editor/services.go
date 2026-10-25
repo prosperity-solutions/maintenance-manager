@@ -16,7 +16,10 @@ import (
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
-type kv struct{ Key, Value string }
+type kv struct {
+	Key, Value string
+	Blank      bool // added empty by the form: hidden behind "Add" when scripts run
+}
 
 type routeRow struct {
 	Namespace, Name string
@@ -78,7 +81,7 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "create", "MaintenanceService", name, nil, spec)
-	redirect(w, r, "/services/"+pathEscape(name))
+	redirect(w, r, "/services/"+pathEscape(name)+"?saved=1")
 }
 
 func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +111,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "update", "MaintenanceService", obj.Name, before, spec)
-	redirect(w, r, "/services/"+pathEscape(obj.Name))
+	redirect(w, r, "/services/"+pathEscape(obj.Name)+"?saved=1")
 }
 
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +140,7 @@ func (s *Server) serviceForm(r *http.Request, name, rv string, isNew bool, spec 
 	for k := 0; v.Has("sel" + itoa(k) + ".key"); k++ {
 		f.Rows = append(f.Rows, kv{Key: v.Get("sel" + itoa(k) + ".key"), Value: v.Get("sel" + itoa(k) + ".value")})
 	}
-	f.Rows = append(f.Rows, kv{}, kv{})
+	f.Rows = append(f.Rows, kv{Blank: true}, kv{Blank: true})
 	if len(spec.RouteSelector.MatchExpressions) > 0 {
 		raw, _ := json.Marshal(spec.RouteSelector.MatchExpressions)
 		f.Expressions = string(raw)
