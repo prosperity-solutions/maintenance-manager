@@ -15,6 +15,35 @@ import (
 	"github.com/prosperity-solutions/maintenance-manager/internal/snapshot"
 )
 
+// previewInput is a plausible place for a previewed page: a window that
+// warns, shows the interstitial, then blocks, with the previewed phase
+// running now and ending in an hour.
+func previewInput(now time.Time, interstitial bool) render.Input {
+	at := now.Truncate(time.Minute)
+	h := time.Hour
+	warn := render.Phase{Window: "preview", Name: "warn", Action: "banner", Number: 1}
+	hello := render.Phase{Window: "preview", Name: "hello", Action: "interstitial", Number: 2}
+	down := render.Phase{Window: "preview", Name: "down", Action: "block", Number: 3}
+	in := render.Input{Interstitial: interstitial, Until: at.Add(h)}
+	if interstitial {
+		warn.Start, warn.End, hello.Start, hello.End, down.Start, down.End = at.Add(-h), at, at, at.Add(h), at.Add(h), at.Add(3*h)
+		in.Context = render.Context{
+			Window:   render.Window{Name: "preview", Start: warn.Start, End: down.End, Phases: 3},
+			Previous: warn, Phase: hello, Next: down,
+			Downtime: render.Span{Start: down.Start, End: down.End}, HasDowntime: true,
+			ContinueAfter: mmv1.DefaultAutoContinueSeconds,
+		}
+		return in
+	}
+	warn.Start, warn.End, hello.Start, hello.End, down.Start, down.End = at.Add(-2*h), at.Add(-h), at.Add(-h), at, at, at.Add(h)
+	in.Context = render.Context{
+		Window:   render.Window{Name: "preview", Start: warn.Start, End: down.End, Phases: 3},
+		Previous: hello, Phase: down,
+		Downtime: render.Span{Start: down.Start, End: down.End}, HasDowntime: true,
+	}
+	return in
+}
+
 // previewCSP isolates a preview from the editor: the page's HTML is
 // arbitrary, so it runs in a sandbox (an opaque origin, no scripts, no forms).
 const previewCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'"
@@ -174,12 +203,9 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request, spec *mmv1.Main
 		loc = spec.FallbackLocale
 	}
 	txt := spec.Locales[loc]
-	body, err := p.Render(render.Input{
-		Locale: loc, Title: txt.Title, Message: txt.Message, Continue: txt.ContinueLabel,
-		Until:        s.now().Add(time.Hour).Truncate(time.Minute),
-		Interstitial: action == string(mmv1.ActionInterstitial),
-		Zone:         zone(r),
-	})
+	in := previewInput(s.now(), action == string(mmv1.ActionInterstitial))
+	in.Locale, in.Title, in.Message, in.Continue, in.Zone = loc, txt.Title, txt.Message, txt.ContinueLabel, zone(r)
+	body, err := p.Render(in)
 	if err != nil {
 		http.Error(w, "rendering failed: "+err.Error(), http.StatusUnprocessableEntity)
 		return

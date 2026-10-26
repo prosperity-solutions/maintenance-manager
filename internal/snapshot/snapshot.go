@@ -5,6 +5,7 @@
 package snapshot
 
 import (
+	"fmt"
 	"slices"
 	"time"
 
@@ -99,6 +100,14 @@ type Decision struct {
 	Until      time.Time // end of the current phase, zero if unknown (.Until)
 	RetryAfter time.Time // end of the contiguous block run, zero if unknown
 	Page       *Page
+	// Context is what a page template sees about where it sits: the window
+	// and its current phase (from the window), and the previous and next
+	// phase and the downtime (from this route's own timeline, so overlapping
+	// windows and per-phase routings show what really happens to the route).
+	Context render.Context
+
+	// pendingNext: the window's next phase, when it is pending (no start).
+	pendingNext render.Phase
 
 	// untilCut: this decision ends where its phase ends, and the next phase
 	// is pending, so the real end is unknown.
@@ -214,11 +223,13 @@ func Build(in Input) *Snapshot {
 				PhaseKey: PhaseKey(ph), Cookie: CookieName(c.uid),
 				Until: u, Page: page,
 			}
+			d.Context, d.pendingNext = windowContext(c, u)
 			route.Timeline = append(route.Timeline, d)
 		}
 		fillRetryAfter(route.Timeline)
+		fillRouteContext(route.Timeline)
 		for i, d := range route.Timeline {
-			k := decisionKey{d.Window, d.Phase, d.Page, nanos(d.From), nanos(d.To), nanos(d.Until), nanos(d.RetryAfter)}
+			k := decisionKey{d.Window, d.Phase, d.Page, nanos(d.From), nanos(d.To), nanos(d.Until), nanos(d.RetryAfter), contextKey(d.Context)}
 			if shared, ok := interned[k]; ok {
 				route.Timeline[i] = shared
 			} else {
@@ -237,6 +248,82 @@ type decisionKey struct {
 	window, phase               string
 	page                        *Page
 	from, to, until, retryAfter int64
+	context                     string // contextKey: everything else a body shows
+}
+
+// contextKey identifies a Context by content, with instants as UnixNano.
+func contextKey(c render.Context) string {
+	ph := func(p render.Phase) string {
+		return fmt.Sprintf("%q/%q/%q/%d/%d/%d", p.Window, p.Name, p.Action, nanos(p.Start), nanos(p.End), p.Number)
+	}
+	return fmt.Sprintf("%q/%d/%d/%d|%s|%s|%s|%t/%d/%d|%d", c.Window.Name, nanos(c.Window.Start), nanos(c.Window.End), c.Window.Phases,
+		ph(c.Phase), ph(c.Previous), ph(c.Next), c.HasDowntime, nanos(c.Downtime.Start), nanos(c.Downtime.End), c.ContinueAfter)
+}
+
+// windowContext is the part of a decision's Context its own window decides:
+// the window, the current phase, the auto-continue wait, and the next phase
+// when it is pending.
+func windowContext(c *candidate, until time.Time) (render.Context, render.Phase) {
+	spec := c.spec
+	segs := Segments(spec)
+	i := c.seg.Phase
+	ph := spec.Phases[i]
+	ctx := render.Context{
+		Window: render.Window{Name: c.window, Phases: len(spec.Phases)},
+		Phase: render.Phase{Window: c.window, Name: ph.Name, Action: string(ph.Action),
+			Start: c.seg.From, End: until, Number: i + 1},
+		ContinueAfter: ph.AutoContinue(),
+	}
+	if len(segs) > 0 {
+		ctx.Window.Start = segs[0].From
+	}
+	if spec.EndsAt != nil {
+		ctx.Window.End = spec.EndsAt.UTC()
+	}
+	var pending render.Phase
+	if n := i + 1; n < len(spec.Phases) && spec.Phases[n].StartsAt == nil {
+		next := spec.Phases[n]
+		pending = render.Phase{Window: c.window, Name: next.Name, Action: string(next.Action), Number: n + 1}
+	}
+	return ctx, pending
+}
+
+// fillRouteContext sets each decision's previous and next phase and its
+// downtime from the route's timeline, so they show what happens to this
+// route: the previous phase is the decision that ends where this one starts,
+// the next one the decision that starts where it ends (or the window's
+// pending next phase); the downtime is the first block decision at or after
+// this one, from the start of its run of blocks to the run's end.
+func fillRouteContext(tl []*Decision) {
+	for i, d := range tl {
+		if i > 0 && !d.From.IsZero() && tl[i-1].To.Equal(d.From) {
+			p := tl[i-1]
+			d.Context.Previous = render.Phase{Window: p.Window, Name: p.Phase, Action: string(p.Action),
+				Start: p.From, End: p.To, Number: p.Context.Phase.Number}
+		}
+		switch {
+		case i+1 < len(tl) && !d.To.IsZero() && tl[i+1].From.Equal(d.To):
+			n := tl[i+1]
+			d.Context.Next = render.Phase{Window: n.Window, Name: n.Phase, Action: string(n.Action),
+				Start: n.From, End: n.Until, Number: n.Context.Phase.Number}
+		case d.untilCut:
+			d.Context.Next = d.pendingNext
+		}
+		for j := i; j < len(tl); j++ {
+			if tl[j].Action != mmv1.ActionBlock {
+				continue
+			}
+			// The run starts where its first block starts, also when this
+			// decision is the run's second block.
+			k := j
+			for k > 0 && tl[k-1].Action == mmv1.ActionBlock && !tl[k-1].To.IsZero() && tl[k-1].To.Equal(tl[k].From) {
+				k--
+			}
+			d.Context.Downtime = render.Span{Start: tl[k].From, End: tl[j].RetryAfter}
+			d.Context.HasDowntime = true
+			break
+		}
+	}
 }
 
 // nanos is t as UnixNano, with the zero time (= open) as 0.

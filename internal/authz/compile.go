@@ -3,7 +3,7 @@ package authz
 import (
 	"fmt"
 	"log/slog"
-	"time"
+	"strconv"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
@@ -22,9 +22,6 @@ const (
 	infoHeader   = "X-Maintenance-Manager"
 	statusPath   = "/__maintenance-manager/status"
 )
-
-// interstitialRefresh is hardcoded on purpose (§11).
-const interstitialRefresh = "8"
 
 // lastResortPage is served when even the built-in page cannot render.
 const lastResortPage = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Maintenance</title><h1>Maintenance</h1><p>This service is temporarily unavailable.</p></html>`
@@ -65,7 +62,7 @@ var (
 	procPassStrip  = procContinue(true, true)
 	procHold       = procContinue(false, false) // the response headers come next
 	procHoldStrip  = procContinue(true, false)
-	statusNone     = statusResponse(render.StatusJSON("none", "", "", "", "", time.Time{}, ""), true)
+	statusNone     = statusResponse(render.StatusJSON(render.Status{Action: "none"}), true)
 	statusNoneHead = statusResponse("", false)
 	statusMethod   = denied(typev3.StatusCode_MethodNotAllowed, "text/plain; charset=utf-8", "405 method not allowed: use GET or HEAD\n",
 		header("allow", "GET, HEAD"), header(infoHeader, "1"))
@@ -130,15 +127,18 @@ func compileDecision(d *snapshot.Decision, log *slog.Logger) *decision {
 
 	for _, loc := range d.Page.Locales.Locales() {
 		text := d.Page.Text(loc)
-		cd.status[loc] = statusResponse(render.StatusJSON(string(d.Action), d.Window, d.Phase, text.Title, text.Message, d.Until, loc), true)
+		cd.status[loc] = statusResponse(render.StatusJSON(render.Status{Action: string(d.Action), Window: d.Window, Phase: d.Phase,
+			Title: text.Title, Message: text.Message, Until: d.Until, Locale: loc, Context: d.Context}), true)
 		cd.statusHead[loc] = statusResponse("", false)
 
 		switch d.Action {
 		case mmv1.ActionInterstitial:
 			body := renderPage(d, loc, text, true, log)
-			cd.page[loc] = denied(typev3.StatusCode_OK, "text/html; charset=utf-8", body,
-				header("set-cookie", d.Cookie+"="+d.PhaseKey+"; Path=/; HttpOnly; SameSite=Lax"),
-				header("refresh", interstitialRefresh))
+			headers := []*corev3.HeaderValueOption{header("set-cookie", d.Cookie+"="+d.PhaseKey+"; Path=/; HttpOnly; SameSite=Lax")}
+			if wait := d.Context.ContinueAfter; wait > 0 { // 0: only the button continues
+				headers = append(headers, header("refresh", strconv.Itoa(wait)))
+			}
+			cd.page[loc] = denied(typev3.StatusCode_OK, "text/html; charset=utf-8", body, headers...)
 		case mmv1.ActionBlock:
 			var extra []*corev3.HeaderValueOption
 			if ra := render.RetryAfter(d.RetryAfter); ra != "" {
@@ -154,7 +154,8 @@ func compileDecision(d *snapshot.Decision, log *slog.Logger) *decision {
 }
 
 func renderPage(d *snapshot.Decision, loc string, text mmv1.PageText, interstitial bool, log *slog.Logger) string {
-	in := render.Input{Locale: loc, Title: text.Title, Message: text.Message, Continue: text.ContinueLabel, Until: d.Until, Interstitial: interstitial}
+	in := render.Input{Locale: loc, Title: text.Title, Message: text.Message, Continue: text.ContinueLabel, Until: d.Until,
+		Interstitial: interstitial, Context: d.Context}
 	body, err := d.Page.Template.Render(in)
 	if err == nil {
 		return body

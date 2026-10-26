@@ -16,6 +16,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -328,5 +329,36 @@ func TestEnvtestCleanup(t *testing.T) {
 	// Idempotent.
 	if err := Cleanup(t.Context(), k8s, releaseNS, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatalf("second cleanup: %v", err)
+	}
+}
+
+// TestEnvtestInterstitialOptionsOnlyOnInterstitials: the CRD's CEL rule
+// refuses interstitial options on another action, and its markers refuse an
+// empty block and a value out of range, before anything reaches a snapshot.
+func TestEnvtestInterstitialOptionsOnlyOnInterstitials(t *testing.T) {
+	ctx := t.Context()
+	win := func(name string, action mmv1.Action, o *mmv1.InterstitialOptions) *mmv1.MaintenanceWindow {
+		return &mmv1.MaintenanceWindow{ObjectMeta: metav1.ObjectMeta{Namespace: releaseNS, Name: name}, Spec: mmv1.MaintenanceWindowSpec{
+			Phases: []mmv1.Phase{{Name: "p", Action: action, Interstitial: o, Routings: []mmv1.Routing{{Services: []string{"x"}}}}}}}
+	}
+	create(t, win("ok-zero", mmv1.ActionInterstitial, &mmv1.InterstitialOptions{AutoContinueSeconds: new(int32(0))}))
+	for name, w := range map[string]*mmv1.MaintenanceWindow{
+		"on-block": win("on-block", mmv1.ActionBlock, &mmv1.InterstitialOptions{AutoContinueSeconds: new(int32(5))}),
+		"empty":    win("empty", mmv1.ActionInterstitial, &mmv1.InterstitialOptions{}),
+		"too-long": win("too-long", mmv1.ActionInterstitial, &mmv1.InterstitialOptions{AutoContinueSeconds: new(int32(3601))}),
+		"negative": win("negative", mmv1.ActionInterstitial, &mmv1.InterstitialOptions{AutoContinueSeconds: new(int32(-1))}),
+	} {
+		err := k8s.Create(ctx, w)
+		if err == nil {
+			t.Cleanup(func() { _ = k8s.Delete(context.Background(), w) })
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if !apierrors.IsInvalid(err) {
+			t.Errorf("%s: refused for another reason: %v", name, err)
+		}
+		if name == "on-block" && !strings.Contains(err.Error(), "only for an interstitial phase") {
+			t.Errorf("on-block: not the CEL rule: %v", err)
+		}
 	}
 }

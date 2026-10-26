@@ -47,7 +47,7 @@ language (`de-AT` → `de`; a page with only `de-CH` also serves `de` and
 | Phase action | Who sees the page | Status |
 |---|---|---|
 | `block` | every browser request (GET or HEAD asking for `text/html`). Other requests get `application/problem+json`. | `503`, with `Retry-After` when the end is known |
-| `interstitial` | a browser's first page view in this phase. The response sets a session cookie; the button (or a refresh after 8 s) reloads the page, and from then on that browser passes. The cookie is per host, so an app on several hosts shows the page once on each. | `200` |
+| `interstitial` | a browser's first page view in this phase. The response sets a session cookie; the button reloads the page (and so does an automatic refresh after the phase's `interstitial.autoContinueSeconds`: 8 by default, `0` for button only), and from then on that browser passes. The cookie is per host, so an app on several hosts shows the page once on each. | `200` |
 | `banner` | nobody: the request passes, with an `X-Maintenance-Manager` response header; the JS client (through the status endpoint) or your front end shows a banner, see [docs/apps.md](apps.md) | — |
 
 ## The template
@@ -66,6 +66,39 @@ automatic.
 | `{{.Until}}` | when this phase ends: the next phase's start or the window's end. Empty when unknown. See [Times](#times). |
 | `{{.Continue}}` | the button text: `continueLabel`, else a built-in one for the language (`Weiter` for `de`, `Continuer` for `fr`, …), else `Continue` |
 | `{{.Interstitial}}` | `true` on the interstitial, `false` on the block page |
+
+**Where the page sits in its maintenance** (all of it, so a template can
+word every case itself):
+
+| Field | What it is |
+|---|---|
+| `{{.Phase}}` | the current phase: `.Phase.Name`, `.Phase.Action` (`interstitial` or `block` on a page), `.Phase.Start`, `.Phase.End` (= `.Until`), `.Phase.Number` (1-based) |
+| `{{.Previous}}`, `{{.Next}}` | the phases before and after, with the same fields plus `.Window` (the next phase can belong to another window that overlaps). `{{.HasPrevious}}` and `{{.HasNext}}` tell whether there is one: write `{{if .HasNext}}`, never `{{if .Next}}` (always true). |
+| `{{.Downtime}}` | the next stretch of `block` phases, at or after the current phase: `.Downtime.Start`, `.Downtime.End`. `{{.HasDowntime}}` tells whether there is one. |
+| `{{.Window}}` | the window: `.Window.Name`, `.Window.Start`, `.Window.End`, `.Window.Phases` (how many) |
+| `{{.ContinueAfter}}` | seconds until the interstitial continues by itself, `0` = only by the button (and `0` on block pages) |
+
+- **Times** (`.Start`, `.End` everywhere) are like `.Until`, with the date
+  (`30 Oct 22:30 UTC`), turned into the visitor's zone by the same script.
+  Each also has a plain `StartISO`/`EndISO` string (RFC 3339 UTC). Unknown
+  times are empty: wrap them in `{{if …}}`.
+- **What the route really sees:** `.Previous`, `.Next` and `.Downtime` follow
+  what happens to *this* app, so a phase that blocks only other services, or another
+  window's block, shows up correctly. A next phase without a start time yet
+  has a name but an empty `.Next.Start`, and is not yet a `.Downtime`. When
+  nothing happens to the app right before or after (a gap), there is no
+  previous or next phase, but `.Downtime` still shows a later block.
+- **Misspelt fields are refused on save**, in every branch, also one that
+  only a block phase reaches.
+- Typical uses: "Maintenance from {{.Downtime.Start}} to {{.Downtime.End}}" on
+  the interstitial; "Back at {{.Downtime.End}}" on the block page; a different
+  sentence `{{if eq .Phase.Action "block"}}`.
+
+> **Title and message do double duty.** The in-app banner (JS client or your
+> own, from the status endpoint) and the API's error JSON show `title` and
+> `message` as **plain text**: they cannot run your template. So keep them
+> short, plain and set in every language, even when your template words
+> everything itself.
 
 ### Allowed syntax
 
@@ -166,7 +199,8 @@ footer a{color:inherit}
 <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 2 21h20L12 2Zm0 6 5.5 11h-11L12 8Z"/></svg>
 <h1>{{.Title}}</h1>
 <p class="message">{{.Message}}</p>
-{{if .Until}}<p class="until">{{if eq .Locale "de"}}Wieder da um{{else}}Back at{{end}} {{.Until}}</p>{{end}}
+{{if .HasDowntime}}{{if .Interstitial}}{{if .Downtime.Start}}<p class="until">{{if eq .Locale "de"}}Wartung ab{{else}}Maintenance from{{end}} {{.Downtime.Start}}{{if .Downtime.End}} {{if eq .Locale "de"}}bis{{else}}to{{end}} {{.Downtime.End}}{{end}}</p>{{end}}
+{{else if .Downtime.End}}<p class="until">{{if eq .Locale "de"}}Wieder da um{{else}}Back at{{end}} {{.Downtime.End}}</p>{{end}}{{end}}
 {{if .Interstitial}}<a class="button" href="">{{.Continue}}</a>{{end}}
 <footer>{{if eq .Locale "de"}}Aktuelle Infos:{{else}}Live updates:{{end}} <a href="https://status.example.com">status.example.com</a></footer>
 </main>
@@ -195,9 +229,16 @@ continueLabel per language) and spec.html.
 
 Rules for spec.html:
 - Go html/template, safe subset only: {{.Title}} {{.Message}} {{.Locale}}
-  {{.Until}} {{.Continue}} {{.Interstitial}}, if/else, with, and the functions
-  eq ne lt le gt ge and or not len. No range, template, define, block,
-  variables or other functions.
+  {{.Until}} {{.Continue}} {{.Interstitial}} and the context {{.Phase}}
+  {{.Previous}} {{.Next}} {{.Downtime}} {{.Window}} {{.ContinueAfter}} with
+  {{.HasPrevious}} {{.HasNext}} {{.HasDowntime}} (use those, not {{if .Next}});
+  if/else, with, and the functions eq ne lt le gt ge and or not len. No
+  range, template, define, block, variables or other functions.
+- Word each case: interstitial ("maintenance from {{.Downtime.Start}} to
+  {{.Downtime.End}}") and block ("back at {{.Downtime.End}}"); every time may
+  be empty, so wrap it in {{if}} or {{with}}.
+- title and message are plain text and also used by the in-app banner and
+  API errors: keep them short and set in every language.
 - Self-contained: CSS in <style>, images as inline SVG or data: URIs, no files
   from the app's own host (they are blocked during maintenance).
 - <html lang="{{.Locale}}">, a viewport meta tag, <meta name="robots"

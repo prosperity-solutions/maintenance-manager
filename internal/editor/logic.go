@@ -105,11 +105,15 @@ func PageProblems(spec *mmv1.MaintenancePageSpec) []snapshot.Problem {
 	if err != nil {
 		return []snapshot.Problem{{Field: "html", Message: err.Error()}}
 	}
-	until := time.Date(2026, 10, 30, 22, 30, 0, 0, time.UTC)
+	block := render.SampleFull
+	block.Interstitial = false
 	for _, tag := range slices.Sorted(maps.Keys(spec.Locales)) {
 		txt := spec.Locales[tag]
-		for _, inter := range []bool{false, true} {
-			if _, err := p.Render(render.Input{Locale: tag, Title: txt.Title, Message: txt.Message, Continue: txt.ContinueLabel, Until: until, Interstitial: inter}); err != nil {
+		// Every locale, as an interstitial and a block with everything known,
+		// and with nothing known, so no branch fails only for visitors.
+		for _, in := range []render.Input{render.SampleFull, block, render.SampleMinimal} {
+			in.Locale, in.Title, in.Message, in.Continue = tag, txt.Title, txt.Message, txt.ContinueLabel
+			if _, err := p.Render(in); err != nil {
 				ps = append(ps, snapshot.Problem{Field: "html", Message: fmt.Sprintf("locale %s: %v", tag, err)})
 				break
 			}

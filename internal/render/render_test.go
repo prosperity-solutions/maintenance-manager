@@ -96,13 +96,21 @@ func TestProblemJSON(t *testing.T) {
 }
 
 func TestStatusJSON(t *testing.T) {
-	got := StatusJSON("block", "w", "down", "T", "M", fixed, "de")
-	want := `{"action":"block","window":"w","phase":"down","title":"T","message":"M","until":"2026-10-30T22:30:00Z","locale":"de"}`
+	got := StatusJSON(Status{Action: "block", Window: "w", Phase: "down", Title: "T", Message: "M", Until: fixed, Locale: "de"})
+	want := `{"action":"block","window":"w","phase":"down","title":"T","message":"M","until":"2026-10-30T22:30:00Z","locale":"de","next":null,"downtime":null}`
 	if got != want {
 		t.Errorf("got %s\nwant %s", got, want)
 	}
-	got = StatusJSON("none", "", "", "", "", time.Time{}, "en")
-	want = `{"action":"none","window":"","phase":"","title":"","message":"","until":null,"locale":"en"}`
+	got = StatusJSON(Status{Action: "none", Locale: "en"})
+	want = `{"action":"none","window":"","phase":"","title":"","message":"","until":null,"locale":"en","next":null,"downtime":null}`
+	if got != want {
+		t.Errorf("got %s\nwant %s", got, want)
+	}
+	got = StatusJSON(Status{Action: "banner", Window: "w", Phase: "warn", Until: fixed, Context: Context{
+		Next:     Phase{Window: "w", Name: "down", Action: "block", Start: fixed},
+		Downtime: Span{Start: fixed}, HasDowntime: true,
+	}})
+	want = `{"action":"banner","window":"w","phase":"warn","title":"","message":"","until":"2026-10-30T22:30:00Z","locale":"","next":{"window":"w","phase":"down","action":"block","start":"2026-10-30T22:30:00Z"},"downtime":{"start":"2026-10-30T22:30:00Z","end":null}}`
 	if got != want {
 		t.Errorf("got %s\nwant %s", got, want)
 	}
@@ -205,18 +213,21 @@ func TestRenderStopsAtTheCap(t *testing.T) {
 }
 
 func TestViewHasNoMethods(t *testing.T) {
-	v := reflect.TypeOf(view{})
-	for _, typ := range []reflect.Type{v, reflect.PointerTo(v)} {
-		if typ.NumMethod() != 0 {
-			t.Fatalf("%s has methods: pages could call them", typ)
+	var check func(path string, typ reflect.Type)
+	check = func(path string, typ reflect.Type) {
+		if typ.NumMethod() != 0 || reflect.PointerTo(typ).NumMethod() != 0 {
+			t.Fatalf("%s (%s) has methods: pages could call them", path, typ)
+		}
+		switch typ.Kind() {
+		case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface, reflect.Func, reflect.Chan:
+			t.Fatalf("%s (%s): no pointers or containers, a nil one is an execution error", path, typ)
+		case reflect.Struct:
+			for i := range typ.NumField() {
+				check(path+"."+typ.Field(i).Name, typ.Field(i).Type)
+			}
 		}
 	}
-	for i := range v.NumField() {
-		f := v.Field(i).Type
-		if f.NumMethod() != 0 || reflect.PointerTo(f).NumMethod() != 0 {
-			t.Fatalf("view.%s (%s) has methods: pages could call them", v.Field(i).Name, f)
-		}
-	}
+	check("view", reflect.TypeOf(view{}))
 }
 
 func TestContinueFor(t *testing.T) {
@@ -290,21 +301,29 @@ func TestDocsExamplePage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the documented example is not a valid page: %v", err)
 	}
-	for _, in := range []Input{
-		{Locale: "de", Title: "Gleich wieder da", Message: "Wartung", Until: fixed, Interstitial: true},
-		{Locale: "en", Title: "Back soon", Message: "Maintenance"},
-		{Locale: "en", Title: "Back soon", Message: "Maintenance", Until: fixed},
+	inter := SampleFull
+	inter.Locale, inter.Title, inter.Message = "de", "Gleich wieder da", "Wartung"
+	block := SampleFull
+	block.Interstitial, block.Phase.Action = false, "block"
+	for _, c := range []struct {
+		in   Input
+		want []string
+	}{
+		{inter, []string{"Wartung ab <time", " bis <time", `href="">Weiter</a>`}},
+		{block, []string{"Back at <time"}},
+		{SampleMinimal, nil},
 	} {
-		out, err := p.Render(in)
+		out, err := p.Render(c.in)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if in.Interstitial != strings.Contains(out, `href="">`+ContinueFor(in.Locale)+`</a>`) {
-			t.Errorf("%s: button %v", in.Locale, in.Interstitial)
+		for _, w := range c.want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%s/%v: %q missing", c.in.Locale, c.in.Interstitial, w)
+			}
 		}
-		want := map[string]string{"de": "Wieder da um <time", "en": "Back at <time"}[in.Locale]
-		if !in.Until.IsZero() && (!strings.Contains(out, want) || !strings.HasSuffix(out, localTime)) {
-			t.Errorf("%s: no local time", in.Locale)
+		if c.want != nil && !strings.HasSuffix(out, localTime) {
+			t.Errorf("%s: no local-time script", c.in.Locale)
 		}
 	}
 }
@@ -325,12 +344,72 @@ func TestDocsAppExamples(t *testing.T) {
 	}
 	until := time.Date(2026, 10, 30, 22, 30, 0, 0, time.UTC)
 	for name, want := range map[string]string{
-		"status-example":  StatusJSON("banner", "db-migration", "warn", "We'll be right back", "Scheduled maintenance tonight.", until, "en"),
-		"status-none":     StatusJSON("none", "", "", "", "", time.Time{}, ""),
+		"status-example": StatusJSON(Status{Action: "banner", Window: "db-migration", Phase: "warn", Title: "We'll be right back",
+			Message: "Scheduled maintenance tonight.", Until: until, Locale: "en", Context: Context{
+				Next:     Phase{Window: "db-migration", Name: "down", Action: "block", Start: until, End: until.Add(2 * time.Hour)},
+				Downtime: Span{Start: until, End: until.Add(2 * time.Hour)}, HasDowntime: true,
+			}}),
+		"status-none":     StatusJSON(Status{Action: "none"}),
 		"problem-example": ProblemJSON("We'll be right back", "Scheduled maintenance tonight.", "db-migration", until),
 	} {
 		if got := block(name); got != want {
 			t.Errorf("docs/apps.md %s:\n got %s\nwant %s", name, got, want)
+		}
+	}
+}
+
+// TestContextFields: the context reaches the template, unknown parts stay
+// empty, and a misspelt field in the branch for "nothing known" is caught at
+// parse time, not at a visitor's request.
+func TestContextFields(t *testing.T) {
+	p, err := Parse(`{{.Phase.Number}}/{{.Window.Phases}} {{.Phase.Action}}{{if .HasNext}} next {{.Next.Action}} at {{.Next.Start}}{{end}}{{if .HasDowntime}} down {{.Downtime.StartISO}}..{{.Downtime.EndISO}}{{end}} wait {{.ContinueAfter}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.Render(SampleFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `2/3 interstitial next block at <time datetime="2026-10-30T22:00:00Z" data-mm-local>30 Oct 22:00 UTC</time> down 2026-10-30T22:00:00Z..2026-10-31T00:00:00Z wait 8` + localTime
+	if got != want {
+		t.Errorf("full:\n got %q\nwant %q", got, want)
+	}
+	got, _ = p.Render(SampleMinimal)
+	if got != "0/0  wait 0" {
+		t.Errorf("minimal: %q", got)
+	}
+	if _, err := Parse(`{{if .HasNext}}{{.Next.Start}}{{else}}{{.Nxt.Start}}{{end}}`); err == nil {
+		t.Error("a misspelt field in the else branch passed")
+	}
+	// A context time in an attribute is plain text, like .Until.
+	p, _ = Parse(`<a title="{{.Next.Start}}">x</a>`)
+	if got, _ := p.Render(SampleFull); got != `<a title="30 Oct 22:00 UTC">x</a>` {
+		t.Errorf("attribute: %q", got)
+	}
+}
+
+// TestFieldsCheckedInEveryBranch: a field that does not exist is refused
+// wherever it sits, also in a branch no sample takes.
+func TestFieldsCheckedInEveryBranch(t *testing.T) {
+	for _, bad := range []string{
+		`{{if eq .Phase.Action "block"}}{{.Downtime.Ends}}{{end}}`,
+		`{{if .HasNext}}{{.Next.Strat}}{{end}}`,
+		`{{with .Next}}{{.Strat}}{{end}}`,
+		`{{(.Next).Strat}}`,
+		`{{.Title.Foo}}`,
+		`{{if false}}{{.Nope}}{{end}}`,
+	} {
+		if _, err := Parse(bad); err == nil {
+			t.Errorf("%s: accepted", bad)
+		}
+	}
+	for _, good := range []string{
+		`{{with .Next}}{{.Start}} {{.Name}}{{else}}{{.Title}}{{end}}`,
+		`{{with .Downtime.End}}{{.}}{{end}}`,
+		`{{(.Next).Start}} {{len .Title}} {{if eq .Phase.Action "block"}}{{.Downtime.End}}{{end}}`,
+	} {
+		if _, err := Parse(good); err != nil {
+			t.Errorf("%s: %v", good, err)
 		}
 	}
 }
