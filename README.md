@@ -136,7 +136,12 @@ For your own look, give the MaintenancePage an `html` template: a Go
 `html/template` (not Handlebars) with `{{.Title}}`, `{{.Message}}`,
 `{{.Locale}}`, `{{.Until}}` (shown in the visitor's own time zone),
 `{{.Continue}}` (the interstitial's button text, `continueLabel` per language)
-and `{{.Interstitial}}`.
+and `{{.Interstitial}}`, plus where it sits in the maintenance: `{{.Phase}}`,
+`{{.Previous}}`, `{{.Next}}`, `{{.Downtime}}` ("maintenance from X to Y"),
+`{{.Window}}` and `{{.ContinueAfter}}`. Title and message stay plain text:
+the in-app banner and API errors use them too. An interstitial phase sets how
+long its page waits before continuing by itself
+(`interstitial: {autoContinueSeconds: 8}`, `0` = only by the button).
 
 ```html
 <h1>{{.Title}}</h1>
@@ -159,7 +164,7 @@ brief to paste into a coding agent:
 1. **The JS client** (below): one script tag, restyled with five CSS
    variables.
 2. **Your own banner:** read `GET /__maintenance-manager/status`
-   (`{"action":"banner","title":…,"message":…,"until":…}`) and draw it with
+   (`{"action":"banner","title":…,"message":…,"downtime":{"start":…,"end":…}}`) and draw it with
    your own components.
 
 Add the client, a single dependency-free file (under 4 KB gzipped), to your

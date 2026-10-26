@@ -51,7 +51,7 @@ otherwise `Accept-Language` does, as for the page.
 
 <!-- status-example:start -->
 ```json
-{"action":"banner","window":"db-migration","phase":"warn","title":"We'll be right back","message":"Scheduled maintenance tonight.","until":"2026-10-30T22:30:00Z","locale":"en"}
+{"action":"banner","window":"db-migration","phase":"warn","title":"We'll be right back","message":"Scheduled maintenance tonight.","until":"2026-10-30T22:30:00Z","locale":"en","next":{"window":"db-migration","phase":"down","action":"block","start":"2026-10-30T22:30:00Z"},"downtime":{"start":"2026-10-30T22:30:00Z","end":"2026-10-31T00:30:00Z"}}
 ```
 <!-- status-example:end -->
 
@@ -62,12 +62,14 @@ otherwise `Accept-Language` does, as for the page.
 | `title`, `message` | the page's texts in the matched language. **Plain text: render them as text, never as HTML.** |
 | `until` | when this phase ends (RFC 3339, UTC), or `null`; see above |
 | `locale` | the language that matched |
+| `next` | the phase that follows for this app: `{window, phase, action, start}` (`start` is `null` while it has no start time), or `null`, also when a gap follows (then `downtime` may still show a later block) |
+| `downtime` | the next stretch of `block` phases for this app: `{start, end}` (either can be `null` when unknown), or `null`, also while the block phase has no start time yet. **Use this for "maintenance from X to Y".** |
 
 Armed but not started, or with a valid bypass header:
 
 <!-- status-none:start -->
 ```json
-{"action":"none","window":"","phase":"","title":"","message":"","until":null,"locale":""}
+{"action":"none","window":"","phase":"","title":"","message":"","until":null,"locale":"","next":null,"downtime":null}
 ```
 <!-- status-none:end -->
 
@@ -192,8 +194,10 @@ The loop around it:
   minutes when the answer is `none`.
 - **On a network error or timeout:** keep what is shown, poll less often,
   and never reload while blocked.
-- `banner` / `interstitial`: show `title` and `message` (as text) and, when
-  `until` is not `null`, the time in the user's zone:
+- `banner` / `interstitial`: show `title` and `message` (as text). For the
+  time, prefer `downtime`: "maintenance from `downtime.start` to
+  `downtime.end`" (each may be `null`). Without a downtime, use `until`, when
+  not `null`. Format times in the user's zone:
   `new Date(until).toLocaleString(locale, {dateStyle: "medium", timeStyle: "short"})`
   (a banner can run days ahead, so keep the date). Label it by action, see
   [`until`](#until-means-this-phase-ends). Remember a dismissal under
@@ -241,7 +245,9 @@ with the response header "X-Maintenance-Manager: 1"; anything else means no
 maintenance. Fields: action (none|banner|interstitial|block; anything else
 is none), window, phase, title, message (plain text, never HTML), until
 (RFC 3339 or null: the end of the CURRENT phase, so the start of the
-downtime during a banner, the end of it during a block), locale.
+downtime during a banner, the end of it during a block), locale, next
+({window, phase, action, start} or null) and downtime ({start, end} or null;
+prefer it for "maintenance from X to Y").
 Poll only while the tab is visible and at once when it becomes visible: 60 s
 with a banner, 15-30 s during a block, 1-5 min when none. On network errors
 keep the current state and back off. Banner/interstitial: show title,

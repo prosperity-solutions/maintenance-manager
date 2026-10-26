@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"reflect"
 	"strings"
 	"text/template/parse"
 	"time"
@@ -28,28 +29,88 @@ var defaultHTML string
 func DefaultSource() string { return defaultHTML }
 
 // Input is what a page template sees: .Title .Message .Locale .Until
-// .Continue .Interstitial
+// .Continue .Interstitial, and the Context.
 type Input struct {
 	Locale, Title, Message string
 	Until                  time.Time // zero = unknown, .Until renders empty
 	// Continue is the interstitial button's text; empty means ContinueFor(Locale).
 	Continue     string
 	Interstitial bool
-	// Zone is the time zone of .Until's text before the visitor's browser
-	// converts it; nil means UTC. Visitors get UTC; the editor's preview,
+	Context
+	// Zone is the time zone of the times' text before the visitor's browser
+	// converts them; nil means UTC. Visitors get UTC; the editor's preview,
 	// which runs no scripts, gets the editor's zone.
 	Zone *time.Location
 }
 
+// Context is where a page sits in its maintenance: .Window, .Phase,
+// .Previous, .Next, .Downtime and .ContinueAfter. Zero values mean "none" or
+// "unknown".
+type Context struct {
+	Window                Window
+	Phase, Previous, Next Phase
+	// Downtime is the next run of consecutive block phases at or after the
+	// current phase; HasDowntime is false when there is none.
+	Downtime    Span
+	HasDowntime bool
+	// ContinueAfter is the interstitial's auto-continue wait in seconds; 0
+	// means only by click, and is 0 on other pages.
+	ContinueAfter int
+}
+
+// Window is a maintenance window for a template.
+type Window struct {
+	Name       string
+	Start, End time.Time // zero = unknown (an undated first phase; no endsAt)
+	Phases     int       // how many phases the window has
+}
+
+// Phase is a phase for a template; a zero Name means there is none.
+type Phase struct {
+	Window, Name, Action string
+	Start, End           time.Time // zero = unknown
+	Number               int       // 1-based within its window
+}
+
+// Span is a stretch of time with possibly unknown ends.
+type Span struct{ Start, End time.Time }
+
 // view is the value the template executes against. Its fields must stay
-// method-free types (string, template.HTML, bool): templates look up methods
-// before fields, so a field with methods (time.Time, say) would widen what a
-// page can call past checkTree's allow-list. TestViewHasNoMethods guards it.
+// method-free types (string, template.HTML, bool, int and structs of them):
+// templates look up methods before fields, so a field with methods
+// (time.Time, say) would widen what a page can call past checkTree's
+// allow-list. No pointers either: a nil one makes {{.Next.Start}} an
+// execution error. TestViewHasNoMethods guards both.
 type view struct {
 	Locale, Title, Message string
 	Until                  template.HTML
 	Continue               string
 	Interstitial           bool
+	Window                 windowView
+	Phase, Previous, Next  phaseView
+	HasPrevious, HasNext   bool
+	Downtime               spanView
+	HasDowntime            bool
+	ContinueAfter          int
+}
+
+type windowView struct {
+	Name             string
+	Start, End       template.HTML
+	StartISO, EndISO string
+	Phases           int
+}
+
+type phaseView struct {
+	Window, Name, Action string
+	Start, End           template.HTML
+	StartISO, EndISO     string
+	Number               int
+}
+
+type spanView struct {
+	Start, End       template.HTML
+	StartISO, EndISO string
 }
 
 // Page is a parsed, validated page template.
@@ -81,15 +142,13 @@ func Parse(html string) (*Page, error) {
 		return nil, err
 	}
 	p := &Page{t: t}
-	sample := Input{
-		Locale:       "en",
-		Title:        "Title",
-		Message:      "Message",
-		Until:        time.Date(2026, 10, 30, 22, 30, 0, 0, time.UTC),
-		Interstitial: true,
-	}
-	if _, err := p.Render(sample); err != nil {
-		return nil, fmt.Errorf("page template: %w", err)
+	// Two samples: everything known, and nothing known, so a field misspelt
+	// in an {{else}} branch for "no next phase" is caught here and not at a
+	// visitor's request.
+	for _, sample := range []Input{SampleFull, SampleMinimal} {
+		if _, err := p.Render(sample); err != nil {
+			return nil, fmt.Errorf("page template: %w", err)
+		}
 	}
 	return p, nil
 }
@@ -106,6 +165,7 @@ func (p *Page) Render(in Input) (string, error) {
 	if in.Continue == "" {
 		in.Continue = ContinueFor(in.Locale)
 	}
+	c := in.Context
 	v := view{
 		Locale:       in.Locale,
 		Title:        in.Title,
@@ -113,6 +173,19 @@ func (p *Page) Render(in Input) (string, error) {
 		Until:        FormatUntil(in.Until, in.Zone),
 		Continue:     in.Continue,
 		Interstitial: in.Interstitial,
+		Window: windowView{Name: c.Window.Name, Start: formatMoment(c.Window.Start, in.Zone), End: formatMoment(c.Window.End, in.Zone),
+			StartISO: iso(c.Window.Start), EndISO: iso(c.Window.End), Phases: c.Window.Phases},
+		Phase:         phaseOf(c.Phase, in.Zone),
+		Previous:      phaseOf(c.Previous, in.Zone),
+		Next:          phaseOf(c.Next, in.Zone),
+		HasPrevious:   c.Previous.Name != "",
+		HasNext:       c.Next.Name != "",
+		HasDowntime:   c.HasDowntime,
+		ContinueAfter: c.ContinueAfter,
+	}
+	if c.HasDowntime {
+		v.Downtime = spanView{Start: formatMoment(c.Downtime.Start, in.Zone), End: formatMoment(c.Downtime.End, in.Zone),
+			StartISO: iso(c.Downtime.Start), EndISO: iso(c.Downtime.End)}
 	}
 	if err := p.t.Execute(&b, v); err != nil {
 		if errors.Is(err, errTooLarge) {
@@ -145,8 +218,16 @@ func checkTree(t *template.Template) error {
 	if t.Tree == nil {
 		return nil
 	}
-	return walk(t.Tree.Root)
+	return walk(t.Tree.Root, viewType)
 }
+
+// viewType is what "." is at the top of a page. checkTree resolves every
+// field path against it, in every branch, so a misspelt field in a branch
+// that only a block phase or a missing next phase reaches is refused at save,
+// not met by a visitor. Inside {{with .X}}, "." is the type of .X; where the
+// type of "." is not known (with a function's result), fields are not
+// checked.
+var viewType = reflect.TypeFor[view]()
 
 // allowedFuncs are the functions a page may call: none of them allocates
 // more than its arguments.
@@ -155,7 +236,7 @@ var allowedFuncs = map[string]bool{
 	"and": true, "or": true, "not": true, "len": true,
 }
 
-func walk(n parse.Node) error {
+func walk(n parse.Node, dot reflect.Type) error {
 	switch n := n.(type) {
 	case nil:
 		return nil
@@ -164,16 +245,16 @@ func walk(n parse.Node) error {
 			return nil
 		}
 		for _, c := range n.Nodes {
-			if err := walk(c); err != nil {
+			if err := walk(c, dot); err != nil {
 				return err
 			}
 		}
 	case *parse.ActionNode:
-		return walkPipe(n.Pipe)
+		return walkPipe(n.Pipe, dot)
 	case *parse.IfNode:
-		return walkBranch(&n.BranchNode)
+		return walkBranch(&n.BranchNode, dot, dot)
 	case *parse.WithNode:
-		return walkBranch(&n.BranchNode)
+		return walkBranch(&n.BranchNode, dot, pipeType(n.Pipe, dot))
 	case *parse.RangeNode:
 		return errors.New("page template: {{range}} is not supported (the page data has no lists)")
 	case *parse.TemplateNode:
@@ -185,17 +266,19 @@ func walk(n parse.Node) error {
 	return nil
 }
 
-func walkBranch(b *parse.BranchNode) error {
-	if err := walkPipe(b.Pipe); err != nil {
+// walkBranch checks an if or with: its condition and else branch see dot,
+// its body sees inner (the same for if; the condition's value for with).
+func walkBranch(b *parse.BranchNode, dot, inner reflect.Type) error {
+	if err := walkPipe(b.Pipe, dot); err != nil {
 		return err
 	}
-	if err := walk(b.List); err != nil {
+	if err := walk(b.List, inner); err != nil {
 		return err
 	}
-	return walk(b.ElseList)
+	return walk(b.ElseList, dot)
 }
 
-func walkPipe(p *parse.PipeNode) error {
+func walkPipe(p *parse.PipeNode, dot reflect.Type) error {
 	if p == nil {
 		return nil
 	}
@@ -204,7 +287,7 @@ func walkPipe(p *parse.PipeNode) error {
 	}
 	for _, c := range p.Cmds {
 		for _, a := range c.Args {
-			if err := walkArg(a); err != nil {
+			if err := walkArg(a, dot); err != nil {
 				return err
 			}
 		}
@@ -212,7 +295,7 @@ func walkPipe(p *parse.PipeNode) error {
 	return nil
 }
 
-func walkArg(n parse.Node) error {
+func walkArg(n parse.Node, dot reflect.Type) error {
 	switch n := n.(type) {
 	case *parse.IdentifierNode:
 		if !allowedFuncs[n.Ident] {
@@ -221,14 +304,70 @@ func walkArg(n parse.Node) error {
 	case *parse.VariableNode:
 		return errors.New("page template: variables ($) are not supported")
 	case *parse.PipeNode:
-		return walkPipe(n)
+		return walkPipe(n, dot)
 	case *parse.ChainNode:
-		return walkArg(n.Node)
-	case *parse.FieldNode, *parse.DotNode, *parse.StringNode, *parse.NumberNode, *parse.BoolNode, *parse.NilNode:
+		if err := walkArg(n.Node, dot); err != nil {
+			return err
+		}
+		if t := argType(n.Node, dot); t != nil {
+			_, err := fieldPath(t, n.Field)
+			return err
+		}
+	case *parse.FieldNode:
+		if dot != nil {
+			_, err := fieldPath(dot, n.Ident)
+			return err
+		}
+	case *parse.DotNode, *parse.StringNode, *parse.NumberNode, *parse.BoolNode, *parse.NilNode:
 	default:
 		return fmt.Errorf("page template: %s is not supported", n)
 	}
 	return nil
+}
+
+// pipeType is the type a pipeline yields when it is a single field or ".",
+// else nil (unknown).
+func pipeType(p *parse.PipeNode, dot reflect.Type) reflect.Type {
+	if p == nil || len(p.Cmds) != 1 || len(p.Cmds[0].Args) != 1 {
+		return nil
+	}
+	return argType(p.Cmds[0].Args[0], dot)
+}
+
+func argType(n parse.Node, dot reflect.Type) reflect.Type {
+	switch n := n.(type) {
+	case *parse.DotNode:
+		return dot
+	case *parse.FieldNode:
+		if dot == nil {
+			return nil
+		}
+		t, _ := fieldPath(dot, n.Ident)
+		return t
+	case *parse.PipeNode:
+		return pipeType(n, dot)
+	case *parse.ChainNode:
+		if t := argType(n.Node, dot); t != nil {
+			t, _ = fieldPath(t, n.Field)
+			return t
+		}
+	}
+	return nil
+}
+
+// fieldPath resolves .A.B.C from t, or says which part does not exist.
+func fieldPath(t reflect.Type, path []string) (reflect.Type, error) {
+	for i, name := range path {
+		if t.Kind() != reflect.Struct {
+			return nil, fmt.Errorf("page template: .%s has no field %q", strings.Join(path[:i], "."), name)
+		}
+		f, ok := t.FieldByName(name)
+		if !ok || !f.IsExported() {
+			return nil, fmt.Errorf("page template: there is no field .%s (see docs/pages.md for the fields)", strings.Join(path[:i+1], "."))
+		}
+		t = f.Type
+	}
+	return t, nil
 }
 
 var errTooLarge = errors.New("rendered page too large")
@@ -284,6 +423,56 @@ func FormatUntil(t time.Time, zone *time.Location) template.HTML {
 	return template.HTML(`<time datetime="` + t.UTC().Format(time.RFC3339) + timeMark + z.Format("15:04 MST") + `</time>`) //nolint:gosec // built from time formats only
 }
 
+func phaseOf(p Phase, zone *time.Location) phaseView {
+	if p.Name == "" {
+		return phaseView{}
+	}
+	return phaseView{Window: p.Window, Name: p.Name, Action: p.Action,
+		Start: formatMoment(p.Start, zone), End: formatMoment(p.End, zone),
+		StartISO: iso(p.Start), EndISO: iso(p.End), Number: p.Number}
+}
+
+// iso is t in RFC 3339 UTC, or "" when unknown.
+func iso(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// formatMoment renders a context time like .Until, but with the date, since
+// it can be days away and a page without scripts cannot know what "today"
+// is: <time datetime="…" data-mm-local>30 Oct 22:30 UTC</time>.
+func formatMoment(t time.Time, zone *time.Location) template.HTML {
+	if t.IsZero() {
+		return ""
+	}
+	if zone == nil {
+		zone = time.UTC
+	}
+	return template.HTML(`<time datetime="` + t.UTC().Format(time.RFC3339) + timeMark + t.In(zone).Format("2 Jan 15:04 MST") + `</time>`) //nolint:gosec // built from time formats only
+}
+
+// SampleFull and SampleMinimal are what Parse renders a page with to check
+// it: every field known, and nothing known.
+var (
+	sampleStart = time.Date(2026, 10, 30, 20, 0, 0, 0, time.UTC)
+	SampleFull  = Input{
+		Locale: "en", Title: "Title", Message: "Message", Interstitial: true,
+		Until: sampleStart.Add(2 * time.Hour),
+		Context: Context{
+			Window:        Window{Name: "window", Start: sampleStart, End: sampleStart.Add(4 * time.Hour), Phases: 3},
+			Previous:      Phase{Window: "window", Name: "warn", Action: "banner", Start: sampleStart, End: sampleStart.Add(time.Hour), Number: 1},
+			Phase:         Phase{Window: "window", Name: "hello", Action: "interstitial", Start: sampleStart.Add(time.Hour), End: sampleStart.Add(2 * time.Hour), Number: 2},
+			Next:          Phase{Window: "window", Name: "down", Action: "block", Start: sampleStart.Add(2 * time.Hour), End: sampleStart.Add(4 * time.Hour), Number: 3},
+			Downtime:      Span{Start: sampleStart.Add(2 * time.Hour), End: sampleStart.Add(4 * time.Hour)},
+			HasDowntime:   true,
+			ContinueAfter: 8,
+		},
+	}
+	SampleMinimal = Input{Locale: "en"}
+)
+
 // continueLabels are the built-in texts of the interstitial's button, by
 // language.
 var continueLabels = map[string]string{
@@ -337,20 +526,50 @@ func ProblemJSON(title, detail, window string, until time.Time) string {
 	return marshal(problem{problemType, title, http.StatusServiceUnavailable, detail, window, untilPtr(until)})
 }
 
-type status struct {
-	Action  string  `json:"action"`
-	Window  string  `json:"window"`
-	Phase   string  `json:"phase"`
-	Title   string  `json:"title"`
-	Message string  `json:"message"`
-	Until   *string `json:"until"`
-	Locale  string  `json:"locale"`
+type statusNext struct {
+	Window string  `json:"window"`
+	Phase  string  `json:"phase"`
+	Action string  `json:"action"`
+	Start  *string `json:"start"`
 }
 
-// StatusJSON is the body of GET /__maintenance-manager/status (§7). action is
-// "none", "banner", "interstitial" or "block".
-func StatusJSON(action, window, phase, title, message string, until time.Time, locale string) string {
-	return marshal(status{action, window, phase, title, message, untilPtr(until), locale})
+type statusSpan struct {
+	Start *string `json:"start"`
+	End   *string `json:"end"`
+}
+
+type status struct {
+	Action   string      `json:"action"`
+	Window   string      `json:"window"`
+	Phase    string      `json:"phase"`
+	Title    string      `json:"title"`
+	Message  string      `json:"message"`
+	Until    *string     `json:"until"`
+	Locale   string      `json:"locale"`
+	Next     *statusNext `json:"next"`
+	Downtime *statusSpan `json:"downtime"`
+}
+
+// Status is what the status endpoint reports (§7).
+type Status struct {
+	Action                        string // "none", "banner", "interstitial" or "block"
+	Window, Phase, Title, Message string
+	Until                         time.Time
+	Locale                        string
+	Context                       Context // Next and Downtime are reported
+}
+
+// StatusJSON is the body of GET /__maintenance-manager/status (§7).
+func StatusJSON(st Status) string {
+	out := status{Action: st.Action, Window: st.Window, Phase: st.Phase, Title: st.Title, Message: st.Message,
+		Until: untilPtr(st.Until), Locale: st.Locale}
+	if n := st.Context.Next; n.Name != "" {
+		out.Next = &statusNext{Window: n.Window, Phase: n.Name, Action: n.Action, Start: untilPtr(n.Start)}
+	}
+	if st.Context.HasDowntime {
+		out.Downtime = &statusSpan{Start: untilPtr(st.Context.Downtime.Start), End: untilPtr(st.Context.Downtime.End)}
+	}
+	return marshal(out)
 }
 
 func marshal(v any) string {

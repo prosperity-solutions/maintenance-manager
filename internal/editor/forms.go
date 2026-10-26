@@ -305,6 +305,9 @@ func EncodeWindow(spec *mmv1.MaintenanceWindowSpec, loc *time.Location) url.Valu
 		v.Set(pre+"name", ph.Name)
 		encodeTime(v, pre+"startsAt", ph.StartsAt, loc)
 		v.Set(pre+"action", string(ph.Action))
+		if ph.Interstitial != nil && ph.Interstitial.AutoContinueSeconds != nil {
+			v.Set(pre+"autoContinue", strconv.Itoa(int(*ph.Interstitial.AutoContinueSeconds)))
+		}
 		for j, r := range ph.Routings {
 			rp := pre + "r" + strconv.Itoa(j) + "."
 			if len(r.Services) > 0 {
@@ -361,6 +364,7 @@ type routingRow struct {
 
 type phaseRow struct {
 	order, name, startsAt, startsAtWas, action string
+	autoContinue                               string // empty = unset (8 s)
 	routings                                   map[int]*routingRow
 	hasServices, hasPage                       bool
 }
@@ -405,6 +409,8 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 			rowAt(rows, i).startsAtWas = first(vals)
 		case "action":
 			rowAt(rows, i).action = first(vals)
+		case "autoContinue":
+			rowAt(rows, i).autoContinue = first(vals)
 		default:
 			j, field, ok := cutIndex(rest, "r")
 			if !ok {
@@ -440,7 +446,7 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 	var kept []keptPhase
 	for _, i := range sortedRows(&p, rows, "phases", maxPhases) {
 		r := rows[i]
-		if r.name == "" && !r.hasServices && r.startsAt == "" && !r.hasPage {
+		if r.name == "" && !r.hasServices && r.startsAt == "" && !r.hasPage && r.autoContinue == "" {
 			continue // the order is prefilled on blank rows, so it does not count
 		}
 		k := keptPhase{row: r, idx: i}
@@ -481,6 +487,18 @@ func decodeWindow(v url.Values, loc *time.Location) (mmv1.MaintenanceWindowSpec,
 			StartsAt: p.decodeTime(f+".startsAt", r.startsAt, r.startsAtWas, loc),
 			Action:   mmv1.Action(r.action),
 			Routings: []mmv1.Routing{},
+		}
+		if r.autoContinue != "" {
+			n, err := strconv.Atoi(r.autoContinue)
+			switch {
+			case err != nil || n < 0 || n > 3600:
+				p.add(f+".autoContinue", "a whole number of seconds from 0 to 3600")
+			case ph.Action != mmv1.ActionInterstitial:
+				p.add(f+".autoContinue", "only an interstitial phase continues by itself: clear it, or make the phase an interstitial")
+			default:
+				secs := int32(n) //nolint:gosec // G109: n is checked to be 0..3600 above
+				ph.Interstitial = &mmv1.InterstitialOptions{AutoContinueSeconds: &secs}
+			}
 		}
 		n := 0
 		for _, j := range sortedRows(&p, r.routings, f+".r0.services", maxRoutings) {

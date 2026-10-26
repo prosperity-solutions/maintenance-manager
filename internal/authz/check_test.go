@@ -423,3 +423,39 @@ func TestConstantTimeEqual(t *testing.T) {
 		}
 	}
 }
+
+// TestInterstitialAutoContinue: the Refresh header follows the phase's
+// autoContinueSeconds: 8 when unset, the number when set, absent for 0.
+func TestInterstitialAutoContinue(t *testing.T) {
+	for _, c := range []struct {
+		opts *mmv1.InterstitialOptions
+		want string
+	}{
+		{nil, "8"},
+		{&mmv1.InterstitialOptions{AutoContinueSeconds: new(int32(30))}, "30"},
+		{&mmv1.InterstitialOptions{AutoContinueSeconds: new(int32(0))}, ""},
+	} {
+		w := mmv1.MaintenanceWindow{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", UID: types.UID("uid-db")},
+			Spec: mmv1.MaintenanceWindowSpec{Enabled: true, EndsAt: mt(tEnd), Phases: []mmv1.Phase{
+				{Name: "hello", StartsAt: mt(tInt), Action: mmv1.ActionInterstitial, Interstitial: c.opts, Routings: []mmv1.Routing{{Services: []string{"shop"}}}},
+			}},
+		}
+		svc := mmv1.MaintenanceService{ObjectMeta: metav1.ObjectMeta{Name: "shop"},
+			Spec: mmv1.MaintenanceServiceSpec{RouteSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "shop"}}}}
+		snap := snapshot.Build(snapshot.Input{
+			Windows: []mmv1.MaintenanceWindow{w}, Services: []mmv1.MaintenanceService{svc},
+			Routes: []snapshot.RouteInfo{{Key: snapshot.RouteKey{Namespace: "shop", Name: "web"}, Labels: map[string]string{"app": "shop"}}},
+			Now:    tWarn,
+		})
+		s := &Server{Now: func() time.Time { return tInt.Add(time.Minute) }}
+		s.Update(snap)
+		resp, err := s.Check(t.Context(), req{headers: map[string]string{"accept": browser}}.build())
+		if err != nil || resp.GetDeniedResponse() == nil {
+			t.Fatalf("%v: no interstitial page: %v", c.opts, err)
+		}
+		if got := respHeader(resp, "refresh"); got != c.want {
+			t.Errorf("%v: refresh %q, want %q", c.opts, got, c.want)
+		}
+	}
+}

@@ -33,6 +33,7 @@ type phaseForm struct {
 	I                                          int
 	Blank                                      bool
 	Order, Name, StartsAt, StartsAtWas, Action string
+	AutoContinue                               string // seconds; empty = the default
 	Display                                    string // startsAt shown with both zones
 	Actions                                    []option
 	Routings                                   []routingForm
@@ -341,6 +342,9 @@ func (s *Server) windowPage(w http.ResponseWriter, r *http.Request, status int, 
 				break
 			}
 			row := "p" + itoa(sub.from[i]) + "."
+			if len(f.Errors["p"+itoa(i)+".autoContinue"]) > 0 {
+				f.Phases[i].AutoContinue = sub.raw.Get(row + "autoContinue") // what was typed, not lost
+			}
 			val, was := sub.raw.Get(row+"startsAt"), sub.raw.Get(row+"startsAtWas")
 			if len(f.Errors["p"+itoa(i)+".startsAt"]) > 0 || (sub.zoneChange && typedChange(val, was, sub.loc)) {
 				f.Phases[i].StartsAt, f.Phases[i].StartsAtWas = val, was
@@ -386,7 +390,8 @@ func (s *Server) windowForm(r *http.Request, loc *time.Location, name, rv string
 	for i, ph := range spec.Phases {
 		pre := "p" + itoa(i) + "."
 		pf := phaseForm{I: i, Order: v.Get(pre + "order"), Name: v.Get(pre + "name"), StartsAt: v.Get(pre + "startsAt"),
-			StartsAtWas: v.Get(pre + "startsAtWas"), Action: v.Get(pre + "action"), Actions: actionOptions(v.Get(pre + "action"))}
+			StartsAtWas: v.Get(pre + "startsAtWas"), Action: v.Get(pre + "action"), Actions: actionOptions(v.Get(pre + "action")),
+			AutoContinue: v.Get(pre + "autoContinue")}
 		if ph.StartsAt != nil {
 			pf.Display = FormatDisplay(ph.StartsAt.Time, loc)
 		}

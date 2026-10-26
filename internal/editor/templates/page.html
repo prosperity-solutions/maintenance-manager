@@ -10,7 +10,7 @@
 <p><label class="block">Fallback locale <span class="req">required</span> <input name="fallbackLocale" value="{{.FallbackLocale}}" size="8" placeholder="en" autocapitalize="off" spellcheck="false"></label>
 <span class="hint">Shown when none of the visitor's languages matches. Must be one of the locales below.</span>{{template "fielderr" index .Errors "fallbackLocale"}}</p>
 <fieldset><legend>Locales <span class="req">at least one</span></legend>
-<p class="hint">One block per language. The visitor's browser languages pick the block; title and message may be empty.</p>
+<p class="hint">One block per language. The visitor's browser languages pick the block. <strong>Title and message also appear, as plain text, in the in-app banner and in API error responses</strong>, which cannot use the HTML template: keep them short and set them in every language, even if your template words everything itself.</p>
 <div data-list>
 {{range $k, $r := .Rows}}<div class="row" data-row="l" data-i="{{$k}}"{{if $r.Blank}} data-blank{{end}}>
 <label>Tag <span class="req">required</span> <input name="l{{$k}}.tag" value="{{$r.Tag}}" size="8" placeholder="de-CH" autocapitalize="off" spellcheck="false"></label>
@@ -30,7 +30,7 @@
 <p><label class="block">HTML template <span class="opt">optional: empty means the built-in page</span>{{template "fielderr" index .Errors "html"}}
 <textarea name="html" rows="16">
 {{.HTML}}</textarea></label>
-<span class="hint">A <strong>Go <code>html/template</code></strong> (not Handlebars), limited to a safe subset: text, <code>{{"{{"}}.Title{{"}}"}}</code> <code>.Message</code> <code>.Locale</code> <code>.Until</code> <code>.Continue</code> <code>.Interstitial</code>, <code>if</code>/<code>else</code>, <code>with</code>, and <code>eq ne lt le gt ge and or not len</code>. <code>.Until</code> shows in each visitor's own time zone (UTC when their browser runs no scripts); <code>.Continue</code> is the button text above.</span></p>
+<span class="hint">A <strong>Go <code>html/template</code></strong> (not Handlebars), limited to a safe subset: text, <code>{{"{{"}}.Title{{"}}"}}</code> <code>.Message</code> <code>.Locale</code> <code>.Until</code> <code>.Continue</code> <code>.Interstitial</code>, and where the page sits: <code>.Phase</code> <code>.Previous</code> <code>.Next</code> <code>.Downtime</code> <code>.Window</code> <code>.ContinueAfter</code> (with <code>.HasPrevious</code> <code>.HasNext</code> <code>.HasDowntime</code>; see the page guide), <code>if</code>/<code>else</code>, <code>with</code>, and <code>eq ne lt le gt ge and or not len</code>. <code>.Until</code> shows in each visitor's own time zone (UTC when their browser runs no scripts); <code>.Continue</code> is the button text above.</span></p>
 <details><summary>Start from the built-in page</summary>
 <p class="hint">This is the page visitors get when the field above is empty. Copy it, then change what you like. The button is the <code>{{"{{"}}if .Interstitial{{"}}"}}</code> line: style the <code>a</code> to change how it looks, and set its text per language with <strong>Continue button</strong> above.</p>
 <p><button type="button" class="small" data-fill="html" hidden>Copy into the HTML template field</button></p>

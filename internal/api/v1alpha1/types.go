@@ -130,6 +130,7 @@ type MaintenanceWindowSpec struct {
 }
 
 // Phase is one step of a window.
+// +kubebuilder:validation:XValidation:rule="!has(self.interstitial) || self.action == 'interstitial'",message="interstitial options are only for an interstitial phase"
 type Phase struct {
 	// Name is a DNS label (lowercase letters, digits, dashes); it appears in
 	// the X-Maintenance-Manager header.
@@ -144,8 +145,39 @@ type Phase struct {
 	// Action is banner, interstitial or block.
 	Action Action `json:"action"`
 
+	// Interstitial holds options for an interstitial phase only.
+	// +optional
+	Interstitial *InterstitialOptions `json:"interstitial,omitempty"`
+
 	// +kubebuilder:validation:MaxItems=32
 	Routings []Routing `json:"routings"`
+}
+
+// InterstitialOptions tune an interstitial phase.
+// +kubebuilder:validation:MinProperties=1
+type InterstitialOptions struct {
+	// AutoContinueSeconds is how long the page waits before it continues by
+	// itself. 0 means never: the visitor clicks the button. Unset means 8.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	AutoContinueSeconds *int32 `json:"autoContinueSeconds,omitempty"`
+}
+
+// DefaultAutoContinueSeconds is the interstitial's wait when
+// autoContinueSeconds is unset.
+const DefaultAutoContinueSeconds = 8
+
+// AutoContinue is the phase's auto-continue wait in seconds: 0 for "never"
+// or a phase that is not an interstitial.
+func (p *Phase) AutoContinue() int {
+	if p.Action != ActionInterstitial {
+		return 0
+	}
+	if p.Interstitial == nil || p.Interstitial.AutoContinueSeconds == nil {
+		return DefaultAutoContinueSeconds
+	}
+	return int(*p.Interstitial.AutoContinueSeconds)
 }
 
 // Action is what a phase does to requests.

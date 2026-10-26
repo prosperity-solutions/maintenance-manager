@@ -143,12 +143,22 @@ spec:
     de: { title: "Gleich wieder da",    message: "Geplante Wartung.", continueLabel: "Zur Seite" }  # continueLabel optional, ≤ 64
 ```
 
-- **Template:** Go `html/template`, with the variables `.Title`, `.Message`, `.Locale`, `.Until`, `.Continue` and `.Interstitial` (bool).
+- **Template:** Go `html/template`, with the variables `.Title`, `.Message`, `.Locale`, `.Until`, `.Continue` and `.Interstitial` (bool), and the context below.
+- **Texts and the template:** `title` and `message` are plain text and also feed the in-app banner (status endpoint, JS client) and the API's problem+json, which cannot run a template. A template may ignore them and word everything itself (`{{if eq .Locale "de"}}…`), but the banner and API errors still use them.
 - **`.Continue`** is the interstitial button's text: the locale's `continueLabel` (one line, at most 64 characters), else a built-in translation for its language (`Weiter` for `de`, `Continuer` for `fr`, about twenty languages; `render.ContinueFor`), else `Continue`. The editor shows the built-in page's source, ready to copy, as the example of a template with a button.
 - **`.Until`** is the end of the *current phase*: the next phase's `startsAt`, or `endsAt`. It is empty if unknown, e.g. when the next phase is pending.
   - It reads correctly in both phase types: "Maintenance starts at {{.Until}}" in a warning phase, "Back at {{.Until}}" in a block phase.
   - It renders as `<time datetime="…Z" data-mm-local>22:30 UTC</time>`. When a page shows it in its text, the renderer adds a small inline script once (at the very end, where browsers still run it; about 0.5 KiB, not counted against the 64 KiB limit) that shows it in the visitor's own time zone and language, with the date when it is not today. Custom pages get it too; without scripts the text stays in UTC. In an attribute `.Until` is plain text ("22:30 UTC") and adds no script; in `<title>` or `<textarea>` it shows as escaped markup, so don't use it there. Bodies are precomputed per locale, so the server cannot know the visitor's zone, and a relative "in 2 hours" would go stale.
   - The editor's preview runs no scripts (sandbox CSP), so it renders the text in the editor's own zone instead.
+- **Context** (`render.Context`): where the page sits.
+  - `.Window`: `Name`, `Start`, `End`, `Phases`.
+  - `.Phase`, `.Previous`, `.Next`: each with `Window`, `Name`, `Action`, `Start`, `End` and a 1-based `Number`. `.HasPrevious` and `.HasNext` say whether there is one: a struct is always "true" in `{{if}}`.
+  - `.Downtime` with `.HasDowntime`: the next run of consecutive block phases, at or after the current phase.
+  - `.ContinueAfter`: the interstitial's auto-continue wait in seconds, 0 = only the button.
+  - Times are elements like `.Until`, with the date in their server text (`30 Oct 22:30 UTC`), plus `StartISO`/`EndISO` strings. Unknown is empty.
+  - **Where it comes from:** `.Window` and `.Phase` come from the window. `.Previous`, `.Next` and `.Downtime` come from the route's own merged timeline: the decision that ends where this one starts, the one that starts where it ends (or the window's pending next phase: name, no start), and the first block at or after this one, from its run's start to the run's end. So overlapping windows and per-phase routings show what really happens to the route. A gap means no previous or next phase, while `.Downtime` still reaches a later block; a pending block phase is a `.Next` but not yet a `.Downtime`.
+  - The whole context is part of the decision interning key, so routes only share a decision, and a rendered body, when everything they show is equal.
+  - `checkTree` resolves every field path against the template data in every branch (inside `{{with}}` against the value it opens), so a misspelt field is refused on save even in a branch only a block phase reaches. `render.Parse` and the editor also render every page with a full and an empty context.
 - **Validation (Go):** `fallbackLocale` must exist, the template must parse and execute, and the rendered body must be ≤ 64 KiB. An invalid page is replaced by the built-in default page.
 - **As built (after M4):** templates are limited to a safe subset, checked on the parse tree before anything runs: text, `{{.Field}}`, `if`/`else`, `with`, and the functions `eq ne lt le gt ge and or not len`. Rejected: `range` (since Go 1.24 it iterates over an integer, so `{{range 9223372036854775807}}{{end}}` runs for ever), `template`/`define`/`block` (recursion), variables, and every other function (nested `js`, `printf` widths or a doubled variable build gigabytes in memory without writing a byte). The check is static because the parse-time run uses sample data and misses branches for other locales. Every replica parses every page when it rebuilds its snapshot, so one such page froze all changes, including disabling a window. Rendering also stops writing at 64 KiB.
 
@@ -178,6 +188,8 @@ spec:
           page: classic-503
 ```
 
+An interstitial phase may carry `interstitial: {autoContinueSeconds: N}`: the page continues by itself after N seconds (the `Refresh` header), `0` means only the button, unset means 8. Range 0–3600; a CEL rule refuses the block on any other action, and the editor shows the field on every phase but only accepts it for interstitials.
+
 ### 4.4 Phase rules
 
 1. **`phases[0].startsAt` may be empty**, which means "starts when the window is enabled". So `enabled` is the manual start.
@@ -202,7 +214,7 @@ spec:
 | action | GET/HEAD with `Accept: text/html` | everything else |
 |---|---|---|
 | `banner` | pass + response header | pass + response header |
-| `interstitial` | page **once** (200 + session cookie + `Refresh: 8`), then pass | pass + response header |
+| `interstitial` | page **once** (200 + session cookie + `Refresh: <autoContinueSeconds>`, default 8, none for 0), then pass | pass + response header |
 | `block` | 503 HTML + `Retry-After` | 503 `application/problem+json` + `Retry-After` |
 
 ## 5. Hooking into Envoy (controller)
@@ -343,7 +355,7 @@ Target: **~5–15 µs CPU per call, p99 < 1 ms server-side, ≤ 2 allocations be
 9. switch d.action:
    banner        → OK + X-Maintenance-Manager header
    interstitial  → isHTML && cookie mm_seen_<hash8(window.UID)> != d.phaseKey
-                     ? Denied 200 + body + Set-Cookie + Refresh: 8
+                     ? Denied 200 + body + Set-Cookie + Refresh: N (the phase's autoContinueSeconds, default 8; none for 0)
                      : OK + X-Maintenance-Manager header
    block         → Denied 503 (HTML or problem+json) + Retry-After + Cache-Control: no-store
 ```
@@ -389,7 +401,7 @@ The same server on port 9001 also serves `envoy.service.ext_proc.v3.ExternalProc
 
 There is exactly one: `GET /__maintenance-manager/status?locale=de-CH`.
 
-- **Response:** 200 JSON `{action, window, phase, title, message, until, locale}`, with headers `X-Maintenance-Manager: 1` and `Cache-Control: no-store`. `action` is `"none"` if nothing is active for this route or a valid bypass header is present.
+- **Response:** 200 JSON `{action, window, phase, title, message, until, locale, next, downtime}`, with headers `X-Maintenance-Manager: 1` and `Cache-Control: no-store`. `action` is `"none"` if nothing is active for this route or a valid bypass header is present. `next` is `{window, phase, action, start}` (start `null` when pending) or `null`; `downtime` is `{start, end}` (either `null` when unknown) or `null`: the same `.Next` and `.Downtime` a page sees, so an in-app banner can say "from X to Y".
 - **It exists only while the route is armed.** Otherwise the request reaches the app, usually as a 404. The JS client treats any response **without** an `X-Maintenance-Manager` header as "nothing active". Apps may answer this path themselves with a cheap 204 (optional, documented).
 - **Bypass for your team:** the request header `X-Maintenance-Manager-Bypass: <token>`, set with a browser header extension. The token is empty (bypass off) or at least 16 characters (the chart schema and `serve` refuse shorter ones: the status endpoint would make a short token guessable). Changing it takes a `kubectl rollout restart` (the pod reads it at start).
   - Compared in constant time.
@@ -514,7 +526,7 @@ Plain server-rendered HTML forms (`html/template`, `embed.FS`). The **only JS** 
 - **Concurrency:** edit forms and the object written are read uncached (`APIReader`), so a save right after a redirect does not hit a stale cache; the form's `resourceVersion` goes into the `Update`. **Disable is the emergency stop:** a merge patch `{"spec":{"enabled":false}}` without a resourceVersion, so it works on a window someone just changed, an invalid one or an ended one. Enable and Start next phase now check the resourceVersion they were shown with, and Start next phase now also refuses if the active phase moved.
 - **§4.4 rule 5:** `startsAt = max(now, previous start + 1 s)` truncated to seconds; an undated active phase 0 counts as "now". A result that would make the window invalid (e.g. after `endsAt`) is refused. §4.4 rule 3's "a changed `endsAt` must not be in the past" compares instants.
 - **Dashboard and services screen** read what the controller sees: SecurityPolicies, Gateways, ListenerSets, Namespaces and grants uncached through the API (never the leader's caches), our CRs and routes from the replica's shared cache (memoised 2 s, computed with its own timeout rather than the first caller's request), so every replica shows the same picture. Windows on the dashboard are read uncached, because their resourceVersion goes into the buttons. When that read fails, armed state and conflicts show as *unknown*, not as "no". **Armed** means our SecurityPolicy targets the route *now*; a route the leader has yet to write shows as *pending*, so a lagging or broken leader is visible. An invalid window shows no active phase and no Start-next button. Conflicts are shown for every matched route, armed or not. Hostnames on the services screen come from an uncached HTTPRoute list, so the shared cache stays stripped (§3).
-- **Preview** is its own response with `Content-Security-Policy: sandbox` (no scripts, opaque origin), opened in a new tab; it sends no `Refresh` or cookie. The form can be previewed before saving. Saving a page renders every locale, in both modes, against the 64 KiB cap.
+- **Preview** is its own response with `Content-Security-Policy: sandbox` (no scripts, opaque origin), opened in a new tab; it sends no `Refresh` or cookie. The form can be previewed before saving. Saving a page renders every locale as an interstitial and as a block page with a full context, and with an empty one, against the 64 KiB cap.
 - **Auth hardening:** `editor.password` needs at least 12 characters (schema; a shorter `existingSecret` password keeps the editor off). Login attempts are rate-limited *before* the compare: one per second per client address (a bounded table, monotonic clock), anything else from that address meanwhile gets `429` at once (not compared, no goroutine parked); a correct login returns its slot. Per address, so a flooding pod cannot lock out the admin's port-forward; behind an HTTPRoute all requests share Envoy's address, so a public URL needs its own login in front. A first version that slept 1 s after each failure let a flood of concurrent guesses through and parked a goroutine per guess in the process authz runs in. Both user and password are hashed before the constant-time compare. Only `GET`, `HEAD` and urlencoded `POST` are accepted; bodies are capped at 4 MiB. A missing editor Secret key is `optional`, so the pod (and authz) still starts, with the editor off.
 - **An editor failure never stops authz:** the editor's runnable logs and waits instead of returning an error; with no password it is off and says so in the log.
 - **No Secret checksum on the pods** (M1 decision, kept): it would put a hash of the password on the Deployment. After changing the password, restart the pods (NOTES.txt says how).
@@ -547,7 +559,7 @@ resources:
   limits:   { memory: 512Mi }              # no CPU limit (avoid throttling)
 ```
 
-**Hardcoded on purpose:** authz port 9001, failOpen true, extAuth timeout 100 ms, interstitial refresh 8 s.
+**Hardcoded on purpose:** authz port 9001, failOpen true, extAuth timeout 100 ms. (The interstitial's refresh is per phase now: `interstitial.autoContinueSeconds`, default 8 s.)
 
 **Pod hardening:** `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, and `seccompProfile: RuntimeDefault`. `automountServiceAccountToken` stays true; the controller needs the token.
 

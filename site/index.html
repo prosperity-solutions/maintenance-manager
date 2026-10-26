@@ -334,6 +334,7 @@ helm install mm oci://ghcr.io/prosperity-solutions/charts/maintenance-manager@sh
 {{if .Interstitial}}&lt;a href=""&gt;{{.Continue}}&lt;/a&gt;{{end}}</code></pre>
   <ul>
     <li><b>Times in the visitor's own zone.</b> <code>{{.Until}}</code> shows 23:30 MEZ on a German page in Berlin, 05:30 PM EST on an English one in New York.</li>
+    <li><b>The page knows the whole plan.</b> <code>{{.Downtime.Start}}</code> to <code>{{.Downtime.End}}</code>, the previous and next phase, what kind they are: word every case your way.</li>
     <li><b>The button speaks their language.</b> <code>{{.Continue}}</code> is your text per language, or a built-in one (Weiter, Continuer, …).</li>
     <li><b>Self-contained.</b> CSS in a <code>&lt;style&gt;</code> tag, images inline: during a block, the app's own host serves nothing else.</li>
   </ul>

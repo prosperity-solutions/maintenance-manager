@@ -746,7 +746,7 @@ func TestFormsCoverEverySpecField(t *testing.T) {
 		"routeSelector.matchLabels": true, "routeSelector.matchExpressions": true,
 		"fallbackLocale": true, "html": true, "locales.title": true, "locales.message": true, "locales.continueLabel": true,
 		"enabled": true, "endsAt": true, "phases.name": true, "phases.startsAt": true, "phases.action": true,
-		"phases.routings.services": true, "phases.routings.page": true,
+		"phases.routings.services": true, "phases.routings.page": true, "phases.interstitial.autoContinueSeconds": true,
 	}
 	for _, typ := range []reflect.Type{
 		reflect.TypeFor[mmv1.MaintenanceServiceSpec](), reflect.TypeFor[mmv1.MaintenancePageSpec](), reflect.TypeFor[mmv1.MaintenanceWindowSpec](),
@@ -1064,5 +1064,19 @@ func TestPreviewShowsTheEditorsZone(t *testing.T) {
 	first, _, _ := strings.Cut(render.DefaultSource(), "\n")
 	if !strings.Contains(form, "data-fill-source>"+template.HTMLEscapeString(first)) || !strings.Contains(form, `data-fill="html" hidden`) {
 		t.Error("the page form does not offer the built-in page to copy")
+	}
+}
+
+// TestAutoContinueTypedValueComesBack: a value the form refuses is shown
+// again as typed, next to its error.
+func TestAutoContinueTypedValueComesBack(t *testing.T) {
+	s, _ := newServer(t)
+	h := s.Handler()
+	form := url.Values{"name": {"w"}, "formTz": {"UTC"}, "p0.order": {"1"}, "p0.name": {"hello"}, "p0.action": {"block"},
+		"p0.autoContinue": {"abc"}, "p0.r0.services": {"shop"}}
+	w := do(t, h, http.MethodPost, "/windows/-/new", form)
+	body := w.Body.String()
+	if w.Code == http.StatusSeeOther || !strings.Contains(body, `name="p0.autoContinue" value="abc"`) || !strings.Contains(body, "a whole number of seconds") {
+		t.Fatalf("%d: the typed value or its error is missing", w.Code)
 	}
 }

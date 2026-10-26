@@ -20,10 +20,11 @@
 <label>Name <span class="req">required</span> <input name="p{{$p.I}}.name" value="{{$p.Name}}" size="20" maxlength="63" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?" title="Lowercase letters, digits and -, no spaces, at most 63" placeholder="warn" autocapitalize="off" spellcheck="false"></label>
 <label>Starts at <span class="opt">optional</span> <input type="datetime-local" step="1" name="p{{$p.I}}.startsAt" value="{{$p.StartsAt}}"></label><input type="hidden" name="p{{$p.I}}.startsAtWas" value="{{$p.StartsAtWas}}">
 <label>Action <select name="p{{$p.I}}.action">{{range $p.Actions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}{{if .Missing}} (invalid){{end}}</option>{{end}}</select></label>
+<label>Auto-continue <input name="p{{$p.I}}.autoContinue" value="{{$p.AutoContinue}}" size="4" inputmode="numeric" pattern="[0-9]+" title="Seconds, 0 to 3600; 0 = only by click" placeholder="8"> s</label>
 <button type="button" class="small" data-remove hidden>Remove phase</button>
 {{if $p.Display}}<span class="hint">{{$p.Display}}</span>{{end}}
-<span class="hint">Order: a whole number, lower runs first. Name: lowercase letters, digits and <code>-</code>, no spaces, at most 63 (it goes into the <code>X-Maintenance-Manager</code> header). Action: <strong>banner</strong> lets requests through and tells the app; <strong>interstitial</strong> shows the page once per visitor; <strong>block</strong> shows the page with a 503.</span>
-{{range $f := (printf "p%d.order p%d.name p%d.startsAt p%d.action" $p.I $p.I $p.I $p.I | fields)}}{{template "fielderr" index $.D.Errors $f}}{{end}}
+<span class="hint">Order: a whole number, lower runs first. Name: lowercase letters, digits and <code>-</code>, no spaces, at most 63 (it goes into the <code>X-Maintenance-Manager</code> header). Action: <strong>banner</strong> lets requests through and tells the app; <strong>interstitial</strong> shows the page once per visitor; <strong>block</strong> shows the page with a 503. Auto-continue (interstitial only): seconds until the page continues by itself, <code>0</code> = only by the button, empty = 8.</span>
+{{range $f := (printf "p%d.order p%d.name p%d.startsAt p%d.action p%d.autoContinue" $p.I $p.I $p.I $p.I $p.I | fields)}}{{template "fielderr" index $.D.Errors $f}}{{end}}
 <div data-list>
 <p class="hint">Which services, and which page they show. Add a second routing to show another page to other services.</p>
 {{range $r := $p.Routings}}<div class="row" data-row="p{{$p.I}}.r" data-i="{{$r.J}}"{{if $r.Blank}} data-blank{{end}}>

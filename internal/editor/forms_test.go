@@ -712,3 +712,45 @@ func FuzzDecodeWindow(f *testing.F) {
 		}
 	})
 }
+
+func TestWindowAutoContinueField(t *testing.T) {
+	base := func(action, auto string) url.Values {
+		v := url.Values{"p0.order": {"1"}, "p0.name": {"hello"}, "p0.action": {action}, "p0.r0.services": {"shop"}}
+		if auto != "" {
+			v.Set("p0.autoContinue", auto)
+		}
+		return v
+	}
+	for _, c := range []struct {
+		action, auto string
+		want         *int32 // nil: unset
+		problem      bool
+	}{
+		{"interstitial", "", nil, false},
+		{"interstitial", "0", new(int32(0)), false},
+		{"interstitial", "30", new(int32(30)), false},
+		{"interstitial", "3601", nil, true},
+		{"interstitial", "abc", nil, true},
+		{"block", "10", nil, true},
+	} {
+		spec, ps := DecodeWindow(base(c.action, c.auto), time.UTC)
+		if c.problem != (len(ps) == 1 && ps[0].Field == "p0.autoContinue") {
+			t.Errorf("%s %q: problems %v", c.action, c.auto, ps)
+			continue
+		}
+		var got *int32
+		if o := spec.Phases[0].Interstitial; o != nil {
+			got = o.AutoContinueSeconds
+		}
+		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+			t.Errorf("%s %q: got %v, want %v", c.action, c.auto, got, c.want)
+		}
+		if c.problem {
+			continue
+		}
+		// Lossless: encoding the decoded spec gives the same field back.
+		if back := EncodeWindow(&spec, time.UTC).Get("p0.autoContinue"); back != c.auto {
+			t.Errorf("%s %q: encoded back as %q", c.action, c.auto, back)
+		}
+	}
+}

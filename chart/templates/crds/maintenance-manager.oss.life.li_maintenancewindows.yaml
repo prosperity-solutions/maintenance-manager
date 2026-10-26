@@ -77,6 +77,20 @@ spec:
                     action:
                       description: Action is banner, interstitial or block.
                       type: string
+                    interstitial:
+                      description: Interstitial holds options for an interstitial
+                        phase only.
+                      minProperties: 1
+                      properties:
+                        autoContinueSeconds:
+                          description: |-
+                            AutoContinueSeconds is how long the page waits before it continues by
+                            itself. 0 means never: the visitor clicks the button. Unset means 8.
+                          format: int32
+                          maximum: 3600
+                          minimum: 0
+                          type: integer
+                      type: object
                     name:
                       description: |-
                         Name is a DNS label (lowercase letters, digits, dashes); it appears in
@@ -113,6 +127,9 @@ spec:
                   - name
                   - routings
                   type: object
+                  x-kubernetes-validations:
+                  - message: interstitial options are only for an interstitial phase
+                    rule: '!has(self.interstitial) || self.action == ''interstitial'''
                 maxItems: 16
                 type: array
             required:
