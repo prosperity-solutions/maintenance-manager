@@ -360,7 +360,7 @@ jobs:
       image_digest: ${{ steps.image.outputs.digest }}
       chart_digest: ${{ steps.chart.outputs.digest }}
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -515,7 +515,7 @@ jobs:
       contents: write # create and publish the GitHub release (which creates the tag)
       packages: read # pull the chart back by digest (packages may still be private)
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -626,7 +626,7 @@ jobs:
       packages: read # read the image and chart (packages may still be private)
       attestations: read # gh attestation verify
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: block
           allowed-endpoints: >
