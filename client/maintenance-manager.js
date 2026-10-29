@@ -103,10 +103,10 @@
   var CSS =
     ":host{all:initial}" +
     ".b,.o{font:15px/1.4 var(--mm-font,system-ui,sans-serif);color:var(--mm-fg,#fff);background:var(--mm-bg,#1f2937);z-index:var(--mm-z,2147483647);position:fixed;left:0;right:0}" +
-    ".b{top:0;display:flex;gap:1em;align-items:center;padding:.6em 1em;box-shadow:0 2px 8px #0004}" +
+    ".b{top:0;display:flex;gap:1em;align-items:center;padding:.6em 1em;padding:calc(.6em + env(safe-area-inset-top,0px)) calc(1em + env(safe-area-inset-right,0px)) .6em calc(1em + env(safe-area-inset-left,0px));box-shadow:0 2px 8px #0004}" +
     ".b div{flex:1}.b button{all:unset;cursor:pointer;font-size:1.4em;padding:0 .3em}" +
     ".b button:focus-visible{outline:2px solid var(--mm-accent,#fbbf24)}" +
-    ".o{top:0;bottom:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:2em}" +
+    ".o{top:0;bottom:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:2em;padding:calc(2em + env(safe-area-inset-top,0px)) calc(2em + env(safe-area-inset-right,0px)) calc(2em + env(safe-area-inset-bottom,0px)) calc(2em + env(safe-area-inset-left,0px))}" +
     ".o div{max-width:36em}.o h1{font-size:1.8em;margin:0 0 .5em}" +
     "strong{color:var(--mm-accent,#fbbf24)}p{margin:.2em 0}";
 

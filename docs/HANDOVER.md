@@ -456,7 +456,7 @@ The first hit wins; otherwise use `fallbackLocale`. Each page precomputes a map 
 
 **As built (M6):**
 - Under 4 KB gzipped (a test checks it). One classic script: in a page it starts itself from `document.currentScript`; loaded with `require` (the tests) it only exports its pure functions.
-- Styling hooks on the host element `#maintenance-manager`: `--mm-bg`, `--mm-fg`, `--mm-accent`, `--mm-font`, `--mm-z` (default `2147483647`).
+- Styling hooks on the host element `#maintenance-manager`: `--mm-bg`, `--mm-fg`, `--mm-accent`, `--mm-font`, `--mm-z` (default `2147483647`). The banner and the overlay add `env(safe-area-inset-*, 0px)` to their padding (banner: top, left, right; overlay: all four), so under `viewport-fit=cover` the notch never covers them.
 - Everything from the status response is set as text (`textContent`), never as markup, so a page title cannot inject HTML into the app.
 - `until` is shown with `Intl.DateTimeFormat` in `data-locale` (date and time, medium/short), in the visitor's time zone.
 - Attributes outside sane bounds fall back to the defaults: `data-poll` 5–3600 s (a tiny value would flood ext_authz while armed; a huge one overflows `setTimeout` and fires at once), `data-delay` 1–3600 s. A `data-poll` above 300 s is kept, not shortened by the back-off cap.

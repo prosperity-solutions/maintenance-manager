@@ -219,24 +219,47 @@ test("a block followed by an already dismissed banner still reloads", async () =
   assert.ok(b.reloadTimer());
 });
 
+// constructedSheetPage runs the client on a page whose browser has
+// CSSStyleSheet and returns its <html>.
+function constructedSheetPage() {
+  const ctxSheet = class { replaceSync(css) { this.css = css; } };
+  const html = node("html");
+  const ctx = vm.createContext({
+    document: { currentScript: { dataset: {} }, visibilityState: "visible", documentElement: html, body: node("body"), createElement: node, addEventListener() {} },
+    navigator: { language: "en" }, localStorage: { getItem: () => null, setItem() {} }, location: {},
+    setTimeout: () => 0, clearTimeout() {}, CSSStyleSheet: ctxSheet, AbortController,
+    Math, JSON, Date, Number, String, Promise, Intl, isFinite, isNaN, encodeURIComponent,
+    fetch: () => Promise.resolve({ type: "basic", status: 200, headers: { has: () => true }, text: () => Promise.resolve(JSON.stringify(banner.body)) }),
+  });
+  vm.runInContext(src, ctx);
+  return html;
+}
+
 test("constructed stylesheets are used where the browser has them", async () => {
   const b = browser({}, [banner]);
   // A second page with CSSStyleSheet available: no <style> element at all.
-  const ctxSheet = class { replaceSync(css) { this.css = css; } };
-  const page = (() => {
-    const html = node("html");
-    const ctx = vm.createContext({
-      document: { currentScript: { dataset: {} }, visibilityState: "visible", documentElement: html, body: node("body"), createElement: node, addEventListener() {} },
-      navigator: { language: "en" }, localStorage: { getItem: () => null, setItem() {} }, location: {},
-      setTimeout: () => 0, clearTimeout() {}, CSSStyleSheet: ctxSheet, AbortController,
-      Math, JSON, Date, Number, String, Promise, Intl, isFinite, isNaN, encodeURIComponent,
-      fetch: () => Promise.resolve({ type: "basic", status: 200, headers: { has: () => true }, text: () => Promise.resolve(JSON.stringify(banner.body)) }),
-    });
-    vm.runInContext(src, ctx);
-    return html;
-  })();
+  const page = constructedSheetPage();
   await b.flush();
   const shadow = page.children[0].shadow;
   assert.equal(shadow.adoptedStyleSheets.length, 1);
   assert.ok(!find(shadow, (n) => n.tagName === "STYLE"), "no inline <style> for style-src to refuse");
+});
+
+test("banner and overlay pad by the safe-area insets", async () => {
+  const b = browser({}, [banner]);
+  const page = constructedSheetPage();
+  await b.flush();
+  const css = page.children[0].shadow.adoptedStyleSheets[0].css;
+  // Every padding declaration of a rule, in order: a plain one first for
+  // browsers without env(), then the safe-area one that wins elsewhere.
+  // Under viewport-fit=cover it clears the notch; without it env() is 0.
+  const paddings = (sel) => {
+    const m = css.match(new RegExp("(?:^|})\\" + sel + "\\{([^}]*)\\}"));
+    assert.ok(m, sel + " rule exists");
+    return [...m[1].matchAll(/(?:^|;)padding[^:]*:([^;]+)/g)].map((d) => d[1]);
+  };
+  assert.deepEqual(paddings(".b"), [".6em 1em",
+    "calc(.6em + env(safe-area-inset-top,0px)) calc(1em + env(safe-area-inset-right,0px)) .6em calc(1em + env(safe-area-inset-left,0px))"]);
+  assert.deepEqual(paddings(".o"), ["2em",
+    "calc(2em + env(safe-area-inset-top,0px)) calc(2em + env(safe-area-inset-right,0px)) calc(2em + env(safe-area-inset-bottom,0px)) calc(2em + env(safe-area-inset-left,0px))"]);
 });
