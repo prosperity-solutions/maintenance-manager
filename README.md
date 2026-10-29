@@ -195,8 +195,11 @@ to every 5 minutes). Banner and interstitial phases show a banner at the top;
 a block phase covers the page, and when it ends every open tab reloads within
 30 seconds (spread out, so they do not all hit the app at once). It renders in
 a Shadow DOM; restyle it with `--mm-bg`, `--mm-fg`, `--mm-accent`, `--mm-font`
-and `--mm-z` on `#maintenance-manager`. Your app may answer the status path
-itself with a cheap `204` to save the 404.
+and `--mm-z` on `#maintenance-manager`. Under `viewport-fit=cover` (iPhone
+apps, Capacitor) the banner and the block page pad themselves by the safe-area
+insets, so the notch and status bar never cover them; without it nothing
+changes. Your app may answer the status path itself with a cheap `204` to save
+the 404.
 
 The status path sits at the root of your host, so it reports on the route that
 serves `/`. If your host is split into path-scoped routes (say `/app` and

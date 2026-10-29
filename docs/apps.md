@@ -151,6 +151,10 @@ still answers with server errors.
 
   That is all, on purpose: the banner stays readable whatever the app's CSS
   does. For more, use option 2.
+- **Notches:** with `<meta name="viewport" content="…, viewport-fit=cover">`
+  (iPhone apps, Capacitor), the banner and the block overlay add
+  `env(safe-area-inset-*)` to their padding, so the status bar never covers
+  them. Nothing to set; without `viewport-fit=cover` the insets are 0.
 - A dismissed banner comes back in a new phase or when the end time moves.
 - The texts come from the window's MaintenancePage, in the matched language,
   so the banner and the page say the same.
