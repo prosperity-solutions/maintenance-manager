@@ -291,3 +291,43 @@ test('data-frame="off" stays silent inside an iframe, and only there', async () 
     assert.match(text(b.shadow()), /Maintenance tonight/, name + ": renders");
   }
 });
+
+test("the banner shows the downtime from–to, or no time without one", async () => {
+  const dt = { start: "2026-11-03T15:00:00Z", end: "2026-11-03T17:00:00Z" };
+  const range = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" })
+    .formatRange(new Date(dt.start), new Date(dt.end));
+  const b = browser({}, [{ ours: true, body: { ...banner.body, downtime: dt } }]);
+  await b.flush();
+  assert.ok(text(b.shadow()).includes(range), text(b.shadow()));
+
+  const plain = browser({}, [banner]);
+  await plain.flush();
+  const box = find(plain.shadow(), (n) => n.tagName === "DIV");
+  assert.equal(box.children.length, 2, "title and message only, no phase end");
+
+  // The block overlay shows it too.
+  const blk = browser({}, [{ ours: true, body: { ...block.body, downtime: dt } }]);
+  await blk.flush();
+  assert.ok(text(find(blk.shadow(), (n) => n.attrs.role === "alertdialog")).includes(range));
+
+  // A moved downtime re-renders the banner.
+  const moved = browser({}, [{ ours: true, body: { ...banner.body, downtime: dt } },
+    { ours: true, body: { ...banner.body, downtime: { ...dt, end: "2026-11-03T18:00:00Z" } } }]);
+  await moved.flush();
+  await moved.tick();
+  assert.ok(text(moved.shadow()).includes(new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" })
+    .formatRange(new Date(dt.start), new Date("2026-11-03T18:00:00Z"))));
+});
+
+test("a dismissed banner comes back when its downtime moves", async () => {
+  const dt = { start: "2026-11-03T15:00:00Z", end: "2026-11-03T17:00:00Z" };
+  const first = { ours: true, body: { ...banner.body, downtime: dt } };
+  const later = { ours: true, body: { ...banner.body, downtime: { ...dt, end: "2026-11-03T18:00:00Z" } } };
+  const b = browser({}, [first, first, later]);
+  await b.flush();
+  find(b.shadow(), (n) => n.tagName === "BUTTON").listeners.click();
+  await b.tick();
+  assert.doesNotMatch(text(b.shadow()), /Maintenance tonight/, "same downtime: stays dismissed");
+  await b.tick();
+  assert.match(text(b.shadow()), /Maintenance tonight/, "the block was extended: shown again");
+});

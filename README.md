@@ -206,7 +206,10 @@ The status path sits at the root of your host, so it reports on the route that
 serves `/`. If your host is split into path-scoped routes (say `/app` and
 `/api` as separate HTTPRoutes), make sure the route serving `/` belongs to the
 same MaintenanceService, or the banner never shows for the others. A dismissed
-banner comes back when the window's end time changes. It works under a strict
+banner comes back when the phase's end or the downtime moves. The time the banner and
+the overlay show is the downtime, from–to ("Nov 3, 2026, 3:00 – 5:00 PM"),
+the same as `.Downtime` on the pages; with no block coming they show no time.
+It works under a strict
 CSP (`script-src 'self'`, Trusted Types): its styles are a constructed
 stylesheet, not inline CSS.
 

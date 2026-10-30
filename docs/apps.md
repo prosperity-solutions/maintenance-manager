@@ -156,7 +156,13 @@ still answers with server errors.
   (iPhone apps, Capacitor), the banner and the block overlay add
   `env(safe-area-inset-*)` to their padding, so the status bar never covers
   them. Nothing to set; without `viewport-fit=cover` the insets are 0.
-- A dismissed banner comes back in a new phase or when the end time moves.
+- **The time it shows** is the downtime: when the next (or current) block
+  starts and ends, from `downtime` ("Nov 3, 2026, 3:00 – 5:00 PM", or
+  "Nov 3, 2026, 3:00 PM –" while the end is open), in the visitor's time zone,
+  the same as `.Downtime` on the pages. Without a coming block it shows no
+  time at all, not the end of the banner phase.
+- A dismissed banner comes back in a new phase, or when the phase's end or the
+  downtime moves.
 - The texts come from the window's MaintenancePage, in the matched language,
   so the banner and the page say the same.
 
