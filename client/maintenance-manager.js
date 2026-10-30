@@ -21,6 +21,7 @@
     ds = ds || {};
     return {
       dismiss: ds.dismiss === "auto" ? "auto" : "click",
+      frame: ds.frame === "off" ? "off" : "on",
       delay: num(ds.delay, 8, 1, 3600),
       poll: num(ds.poll, 60, 5, 3600),
       locale: ds.locale || navLang || "en"
@@ -90,6 +91,16 @@
   if (typeof document === "undefined") return;
 
   var cfg = parseConfig(script && script.dataset, navigator.language);
+  // data-frame="off": inside an iframe, stay silent (the outer page tells the
+  // user). top, unlike self, cannot be overwritten by page script. A browser
+  // that refuses the comparison counts as framed.
+  if (cfg.frame === "off") {
+    try {
+      if (window.top !== window) return;
+    } catch (e) {
+      return;
+    }
+  }
   var interval = cfg.poll;
   var timer = 0;
   var autoTimer = 0;

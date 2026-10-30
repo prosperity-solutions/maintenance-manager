@@ -187,6 +187,7 @@ pages as a classic script tag (not bundled, not `type="module"`):
 | `data-delay` | seconds | `8` |
 | `data-poll` | seconds, 5–3600: a banner shows within about this long after its phase starts | `60` |
 | `data-locale` | BCP 47 tag | the browser's language |
+| `data-frame` | `off`: inside an iframe, do nothing (no polling, no banner, no block overlay), so a page framed by another page with the client shows one banner, not two. Only when the outer page is on the same host: otherwise the frame's own maintenance shows nowhere | `on` |
 
 While the tab is visible, it asks `/__maintenance-manager/status` on your own
 host. That path only answers while a window is armed; otherwise your app

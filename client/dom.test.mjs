@@ -39,7 +39,8 @@ function find(n, pred) {
 
 // browser builds a fake page. Each fetch takes the next queued answer:
 // {ours, status, body}, {redirect: true}, {reject: true} or {badBody: true}.
-function browser(dataset, responses, store = new Map()) {
+// win, when given, is the page's window (for self and top).
+function browser(dataset, responses, store = new Map(), win = undefined) {
   let id = 0;
   const timers = new Map();
   const docListeners = {};
@@ -62,6 +63,7 @@ function browser(dataset, responses, store = new Map()) {
     location: { reload: () => { reloads++; } },
     setTimeout: (f, ms) => { timers.set(++id, { f, ms }); return id; },
     clearTimeout: (t) => { timers.delete(t); },
+    window: win,
     Math, JSON, Date, Number, String, Promise, Intl, isFinite, isNaN, encodeURIComponent, AbortController,
     fetch: (url, opts) => {
       requests.push({ url, opts });
@@ -262,4 +264,30 @@ test("banner and overlay pad by the safe-area insets", async () => {
     "calc(.6em + env(safe-area-inset-top,0px)) calc(1em + env(safe-area-inset-right,0px)) .6em calc(1em + env(safe-area-inset-left,0px))"]);
   assert.deepEqual(paddings(".o"), ["2em",
     "calc(2em + env(safe-area-inset-top,0px)) calc(2em + env(safe-area-inset-right,0px)) calc(2em + env(safe-area-inset-bottom,0px)) calc(2em + env(safe-area-inset-left,0px))"]);
+});
+
+test('data-frame="off" stays silent inside an iframe, and only there', async () => {
+  const framed = { self: {}, top: {} };
+  const own = {};
+  own.self = own;
+  own.top = own;
+  const throwing = { self: {}, get top() { throw new Error("SecurityError"); } };
+
+  const silent = browser({ frame: "off" }, [block], new Map(), framed);
+  await silent.flush();
+  assert.equal(silent.requests.length, 0, "no polling");
+  assert.equal(silent.html.children.length, 0, "no rendering");
+  assert.equal(silent.timers.size, 0, "nothing scheduled");
+  assert.equal(silent.docListeners.visibilitychange, undefined, "no wake-up on tab switch");
+
+  const refused = browser({ frame: "off" }, [block], new Map(), throwing);
+  await refused.flush();
+  assert.equal(refused.requests.length, 0, "a refused comparison counts as framed");
+
+  for (const [name, ds, win] of [["default, framed", {}, framed], ["off, top level", { frame: "off" }, own]]) {
+    const b = browser(ds, [banner], new Map(), win);
+    await b.flush();
+    assert.equal(b.requests.length, 1, name + ": polls");
+    assert.match(text(b.shadow()), /Maintenance tonight/, name + ": renders");
+  }
 });

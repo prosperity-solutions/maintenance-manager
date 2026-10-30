@@ -135,6 +135,7 @@ still answers with server errors.
   | `data-delay` | seconds | `8` |
   | `data-poll` | seconds, 5–3600. A banner shows within about this long (plus up to 20 % jitter) after its phase starts. With nothing armed it polls less often, up to every 5 minutes. | `60` |
   | `data-locale` | a language tag, e.g. `de-CH` | the browser's language |
+  | `data-frame` | `off`: when the page runs inside an iframe (`window.top !== window`), the client does nothing: no polling, no banner, no block overlay, no reload after a block. Set it on pages that another page with the client frames, so users see one banner. Only when the outer page is on the same host (the client asks its own host): otherwise the frame's own maintenance shows nowhere. | `on` |
 
 - **Styling:** the banner lives in a Shadow DOM, so your CSS cannot break it
   and it cannot break yours. Five CSS variables pass through:
@@ -239,6 +240,8 @@ Use <option 1: the JS client | option 2: our own banner component>.
 Option 1: add the client as a classic <script src> tag (not bundled, not
 type="module") to every HTML page, self-hosted from the release assets or
 jsDelivr pinned to vX.Y.Z, with data-dismiss="click" and data-poll="60".
+If pages of this app are shown inside an iframe of a page on the same host that
+also loads the client, add data-frame="off" to those pages.
 Style it only through --mm-bg, --mm-fg, --mm-accent (title and focus ring),
 --mm-font and --mm-z on #maintenance-manager, using our design tokens.
 

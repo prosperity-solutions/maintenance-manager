@@ -9,13 +9,13 @@ import { gzipSync } from "node:zlib";
 const mm = createRequire(import.meta.url)("./maintenance-manager.js");
 
 test("config defaults and attributes", () => {
-  assert.deepEqual(mm.parseConfig({}, "de-CH"), { dismiss: "click", delay: 8, poll: 60, locale: "de-CH" });
-  assert.deepEqual(mm.parseConfig({ dismiss: "auto", delay: "3", poll: "30", locale: "fr" }, "de"),
-    { dismiss: "auto", delay: 3, poll: 30, locale: "fr" });
+  assert.deepEqual(mm.parseConfig({}, "de-CH"), { dismiss: "click", frame: "on", delay: 8, poll: 60, locale: "de-CH" });
+  assert.deepEqual(mm.parseConfig({ dismiss: "auto", frame: "off", delay: "3", poll: "30", locale: "fr" }, "de"),
+    { dismiss: "auto", frame: "off", delay: 3, poll: 30, locale: "fr" });
   // Nonsense falls back to the defaults instead of polling in a tight loop
   // (or overflowing setTimeout, which fires at once).
-  assert.deepEqual(mm.parseConfig({ dismiss: "never", delay: "-1", poll: "0" }, undefined),
-    { dismiss: "click", delay: 8, poll: 60, locale: "en" });
+  assert.deepEqual(mm.parseConfig({ dismiss: "never", frame: "no", delay: "-1", poll: "0" }, undefined),
+    { dismiss: "click", frame: "on", delay: 8, poll: 60, locale: "en" });
   assert.equal(mm.parseConfig({ poll: "0.01" }).poll, 60);
   assert.equal(mm.parseConfig({ poll: "3e6" }).poll, 60);
   assert.equal(mm.parseConfig({ poll: "5" }).poll, 5);
