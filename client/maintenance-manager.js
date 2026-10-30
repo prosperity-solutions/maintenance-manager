@@ -16,7 +16,7 @@
     return v != null && v !== "" && isFinite(n) && n >= min && n <= max ? n : def;
   }
 
-  // parseConfig reads the data-* attributes (as in element.dataset).
+  // parseConfig reads element.dataset.
   function parseConfig(ds, navLang) {
     ds = ds || {};
     return {
@@ -50,21 +50,28 @@
       return null;
     }
     if (!s || typeof s !== "object" || !ACTIONS[s.action]) return null;
-    var until = s.until ? new Date(s.until) : null;
+    var dt = s.downtime || {};
     return {
       action: s.action,
       window: String(s.window || ""),
       phase: String(s.phase || ""),
       title: String(s.title || ""),
       message: String(s.message || ""),
-      until: until && !isNaN(until.getTime()) ? until : null,
+      until: date(s.until),
+      from: date(dt.start),
+      to: date(dt.end),
       locale: String(s.locale || "")
     };
   }
 
-  // dismissKey: per window, phase and end, so a postponed window shows again.
+  function date(v) {
+    var d = v ? new Date(v) : null;
+    return d && !isNaN(d.getTime()) ? d : null;
+  }
+
+  // dismissKey: per window, phase, end and downtime: a moved one shows again.
   function dismissKey(s) {
-    return "mm:" + s.window + ":" + s.phase + (s.until ? ":" + s.until.getTime() : "");
+    return "mm:" + s.window + ":" + s.phase + (s.until ? ":" + +s.until : "") + (s.from ? ":" + +s.from : "") + (s.to ? ":" + +s.to : "");
   }
 
   // reloadDelay: 0–30 s, so tabs do not all hit the restarted app at once.
@@ -72,17 +79,21 @@
     return Math.floor(r * 30000);
   }
 
-  function formatUntil(d, locale) {
+  // when: the next or current downtime, from–to (open end: "from –").
+  function when(s, locale) {
+    var a = s.from, b = s.to;
+    if (!a) return "";
     try {
-      return new Intl.DateTimeFormat(locale || undefined, { dateStyle: "medium", timeStyle: "short" }).format(d);
+      var f = new Intl.DateTimeFormat(locale || undefined, { dateStyle: "medium", timeStyle: "short" });
+      return b ? f.formatRange(a, b) : f.format(a) + " –";
     } catch (e) {
-      return d.toISOString();
+      return a.toISOString() + " – " + (b ? b.toISOString() : "");
     }
   }
 
   var api = {
     parseConfig: parseConfig, nextInterval: nextInterval, jitter: jitter,
-    parseStatus: parseStatus, dismissKey: dismissKey, reloadDelay: reloadDelay
+    parseStatus: parseStatus, dismissKey: dismissKey, reloadDelay: reloadDelay, when: when
   };
   if (typeof module === "object" && module.exports) {
     module.exports = api;
@@ -91,9 +102,8 @@
   if (typeof document === "undefined") return;
 
   var cfg = parseConfig(script && script.dataset, navigator.language);
-  // data-frame="off": inside an iframe, stay silent (the outer page tells the
-  // user). top, unlike self, cannot be overwritten by page script. A browser
-  // that refuses the comparison counts as framed.
+  // data-frame="off": silent in an iframe. top, unlike self, cannot be
+  // overwritten; a refused comparison counts as framed.
   if (cfg.frame === "off") {
     try {
       if (window.top !== window) return;
@@ -184,7 +194,8 @@
     h.id = "mm-title";
     box.appendChild(h);
     if (s.message) box.appendChild(el("p", s.message));
-    if (s.until) box.appendChild(el("p", formatUntil(s.until, s.locale || cfg.locale)));
+    var w = when(s, s.locale || cfg.locale);
+    if (w) box.appendChild(el("p", w));
   }
 
   function render(s) {
