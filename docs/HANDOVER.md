@@ -442,6 +442,7 @@ The first hit wins; otherwise use `fallbackLocale`. Each page precomputes a map 
 | `data-delay` | seconds | `8` |
 | `data-poll` | seconds | `60` |
 | `data-locale` | BCP 47 tag | `navigator.language` |
+| `data-frame` | `off`: in an iframe (`window.top !== window`, or the comparison throws) the client does nothing, no polling and no rendering. Meant for a frame on the outer page's host: the client asks its own host, so on another host the frame's maintenance would show nowhere | `on` |
 
 **Polling:**
 - Poll only while the tab is **visible**, and once immediately on `visibilitychange` → visible.
